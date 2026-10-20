@@ -35,6 +35,13 @@ def send_notification_job(self, job_id: str):
         job.save(update_fields=["next_attempt_at", "last_error", "updated_at"])
         return {"ok": True, "rate_limited": True}
 
+    # Claim atomically: the drain task can dispatch the same job twice while a
+    # backlog is still queued, and only one worker may deliver it.
+    claimed = NotificationJob.objects.filter(
+        id=job.id, status__in=[NotificationStatus.QUEUED, NotificationStatus.FAILED]
+    ).update(status=NotificationStatus.SENDING, updated_at=timezone.now())
+    if not claimed:
+        return {"ok": True, "skipped": True, "status": "claimed_elsewhere"}
     job.status = NotificationStatus.SENDING
     job.attempts += 1
     job.celery_task_id = getattr(self.request, "id", "") or ""
@@ -125,6 +132,11 @@ def process_recording_job(job_id: str):
 
     if job.status == RecordingStatus.READY:
         return {"ok": True, "skipped": True}
+    claimed = RecordingJob.objects.filter(
+        id=job.id, status__in=[RecordingStatus.REQUESTED, RecordingStatus.FAILED]
+    ).update(status=RecordingStatus.RECORDING, updated_at=timezone.now())
+    if not claimed:
+        return {"ok": True, "skipped": True, "status": "claimed_elsewhere"}
 
     adapter = get_recording_adapter(job.vendor)
     try:
@@ -198,3 +210,23 @@ def forward_siem_event(job_id: str):
         job.status = NotificationStatus.FAILED
     job.save(update_fields=["status", "last_error", "updated_at"])
     return {"ok": False, "error": response}
+
+
+@shared_task(name="apps.ops.tasks.purge_expired_evidence")
+def purge_expired_evidence(limit: int = 500):
+    """Delete snapshot files + rows past expires_at; nothing else enforced the TTL."""
+    from apps.ops.models import SnapshotObject
+    from apps.ops.storage.evidence import get_evidence_storage
+
+    storage = get_evidence_storage()
+    expired = SnapshotObject.objects.filter(expires_at__lte=timezone.now()).order_by("expires_at")[:limit]
+    purged = 0
+    for snap in expired:
+        try:
+            storage.delete(snap.snapshot_key)
+        except Exception as exc:
+            logger.warning("Could not delete evidence %s: %s", snap.snapshot_key, exc)
+            continue
+        snap.delete()
+        purged += 1
+    return {"ok": True, "purged": purged}

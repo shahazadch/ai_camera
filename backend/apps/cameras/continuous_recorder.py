@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 SEGMENT_SECONDS = 60
 TARGET_FPS = 8
-JPEG_QUALITY = 85
 
 
 class _CameraWorker:
@@ -113,7 +112,8 @@ class _CameraWorker:
             self._stop.set()
             return
         if not camera.auto_record or not camera.is_active or not camera.rtsp_url:
-            self._stop.wait(5)
+            # sync_camera starts a fresh worker if recording is re-enabled.
+            self._stop.set()
             return
 
         from apps.ops.models import RecordingJob, RecordingStatus, RecordingVendor
@@ -271,7 +271,12 @@ class ContinuousRecorderManager:
 
     def sync_camera(self, camera) -> None:
         camera_id = str(camera.id)
-        should_run = bool(camera.auto_record and camera.is_active and camera.rtsp_url)
+        should_run = bool(
+            settings.CONTINUOUS_RECORDING
+            and camera.auto_record
+            and camera.is_active
+            and camera.rtsp_url
+        )
         with self._lock:
             worker = self._workers.pop(camera_id, None)
         # Always restart so URL / flag changes apply; never block the API on RTSP.

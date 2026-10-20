@@ -857,7 +857,6 @@ def _draw_tracking_overlays(frame, camera):
         return
 
 
-_HOG_DETECTOR = None
 _LAST_DETECT_EVENT: dict[str, float] = {}
 _LAST_UNKNOWN_SNAPSHOT: dict[str, float] = {}
 _LAST_KNOWN_SIGHTING: dict[str, float] = {}
@@ -874,6 +873,33 @@ _IDENTITY_HOLD_SEC = 8.0
 _IDENTITY_CONFIRM: dict[str, dict] = {}
 # Temporarily off — re-enable when thief / blacklist alerts are needed again.
 THIEF_DETECTION_ENABLED = False
+
+
+_STATE_MAX_AGE_SEC = 120.0  # longest cooldown above is 30 s
+_last_state_prune = 0.0
+
+
+def _prune_detection_state(now: float) -> None:
+    """Drop stale per-slot timestamps so these maps don't grow per grid cell forever."""
+    global _last_state_prune
+    if now - _last_state_prune < 60.0:
+        return
+    _last_state_prune = now
+    cutoff = now - _STATE_MAX_AGE_SEC
+    for table in (
+        _LAST_DETECT_EVENT,
+        _LAST_UNKNOWN_SNAPSHOT,
+        _LAST_KNOWN_SIGHTING,
+        _LAST_VERIFY_EVENT,
+        _LAST_THIEF_CAPTURE,
+        _LAST_WEAPON_CAPTURE,
+        _LAST_MOBILE_USE,
+    ):
+        for key in [k for k, ts in list(table.items()) if ts < cutoff]:
+            table.pop(key, None)
+    for table in (_IDENTITY_HOLD, _IDENTITY_CONFIRM):
+        for key in [k for k, v in list(table.items()) if float(v.get("seen_at") or 0.0) < cutoff]:
+            table.pop(key, None)
 
 
 def _identity_slot_key(camera_id, x: int, y: int) -> str:
@@ -1871,6 +1897,8 @@ def _detect_and_record(frame, camera) -> tuple[int, list[str], dict]:
         import time
 
         from apps.events.pipeline import create_detection_event
+
+        _prune_detection_state(time.time())
 
         from .detection import (
             find_illegal_activity,

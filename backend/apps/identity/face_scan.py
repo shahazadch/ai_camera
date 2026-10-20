@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 import numpy as np
 
@@ -75,34 +77,42 @@ def scan_face_from_bytes(
         from .face_ai import models_available, quality_from_crop, scan_and_embed
 
         if models_available():
-            last_error: Exception | None = None
-            for score in (0.45, 0.32, 0.22):
-                try:
-                    detected = scan_and_embed(
-                        image_bytes,
-                        require_face=True,
-                        score_threshold=score,
-                    )
-                    quality, blur = quality_from_crop(detected.crop_jpeg)
-                    return FaceScanResult(
-                        face_jpeg=detected.crop_jpeg,
-                        face_count=1,
-                        quality_score=max(quality, float(detected.score)),
-                        blur_score=blur,
-                        bbox=detected.bbox,
-                        used_full_image=False,
-                        feature=detected.feature,
-                        engine="sface",
-                    )
-                except ValueError as exc:
-                    last_error = exc
-                    continue
-            # Do NOT re-raise — Haar often still finds the face on CCTV crops.
-            _ = last_error
+            try:
+                detected = scan_and_embed(
+                    image_bytes,
+                    require_face=True,
+                    score_threshold=0.45,
+                    fallback_thresholds=(0.32, 0.22),
+                )
+                quality, blur = quality_from_crop(detected.crop_jpeg)
+                return FaceScanResult(
+                    face_jpeg=detected.crop_jpeg,
+                    face_count=1,
+                    quality_score=max(quality, float(detected.score)),
+                    blur_score=blur,
+                    bbox=detected.bbox,
+                    used_full_image=False,
+                    feature=detected.feature,
+                    engine="sface",
+                )
+            except ValueError:
+                # Do NOT re-raise — Haar often still finds the face on CCTV crops.
+                pass
     except Exception:
         pass
 
     return _haar_scan(image_bytes, require_face=require_face, min_size=min_size)
+
+
+# Cached cascades are shared across threads; detectMultiScale is not thread-safe.
+_cascade_lock = threading.Lock()
+
+
+@lru_cache(maxsize=4)
+def _cascade(name: str):
+    import cv2
+
+    return cv2.CascadeClassifier(cv2.data.haarcascades + name)
 
 
 def _haar_scan(
@@ -118,26 +128,23 @@ def _haar_scan(
     gray = cv2.equalizeHist(gray)
     face_min = max(16, int(min_size))
 
-    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-    detector = cv2.CascadeClassifier(cascade_path)
-    faces = detector.detectMultiScale(
-        gray,
-        scaleFactor=1.07,
-        minNeighbors=3,
-        minSize=(face_min, face_min),
-        flags=cv2.CASCADE_SCALE_IMAGE,
-    )
-
-    height, width = image.shape[:2]
-    if len(faces) == 0:
-        profile_path = cv2.data.haarcascades + "haarcascade_profileface.xml"
-        profile = cv2.CascadeClassifier(profile_path)
-        faces = profile.detectMultiScale(
+    with _cascade_lock:
+        faces = _cascade("haarcascade_frontalface_default.xml").detectMultiScale(
             gray,
             scaleFactor=1.07,
             minNeighbors=3,
             minSize=(face_min, face_min),
+            flags=cv2.CASCADE_SCALE_IMAGE,
         )
+        if len(faces) == 0:
+            faces = _cascade("haarcascade_profileface.xml").detectMultiScale(
+                gray,
+                scaleFactor=1.07,
+                minNeighbors=3,
+                minSize=(face_min, face_min),
+            )
+
+    height, width = image.shape[:2]
 
     if len(faces) == 0:
         if require_face:

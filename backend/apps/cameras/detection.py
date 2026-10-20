@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -13,6 +14,9 @@ import requests
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
+
+# Live person-watch passes per second per camera (LIVE_DETECT_FPS).
+LIVE_DETECT_INTERVAL = 1.0 / max(0.5, float(os.getenv("LIVE_DETECT_FPS", "4")))
 
 # OpenCV native code is not reliably re-entrant on Windows; serialize all cv2 use.
 opencv_lock = threading.RLock()
@@ -275,34 +279,6 @@ def _focus_only(
     return focused
 
 
-def _map_box_from_rotation(
-    x: int,
-    y: int,
-    w: int,
-    h: int,
-    angle: int,
-    orig_w: int,
-    orig_h: int,
-) -> tuple[int, int, int, int]:
-    """Map a box from a rotated image back into the original frame coordinates."""
-    corners = [(x, y), (x + w, y), (x, y + h), (x + w, y + h)]
-    mapped = []
-    for cx, cy in corners:
-        if angle == 0:
-            mapped.append((cx, cy))
-        elif angle == 90:
-            mapped.append((cy, orig_w - cx - 1))
-        elif angle == 180:
-            mapped.append((orig_w - cx - 1, orig_h - cy - 1))
-        elif angle == 270:
-            mapped.append((orig_h - cy - 1, cx))
-    xs = [p[0] for p in mapped]
-    ys = [p[1] for p in mapped]
-    x1, y1 = max(0, min(xs)), max(0, min(ys))
-    x2, y2 = min(orig_w, max(xs)), min(orig_h, max(ys))
-    return x1, y1, max(1, x2 - x1), max(1, y2 - y1)
-
-
 class OpenCVObjectDetector:
     """YOLOv4-tiny COCO detector — only confident, visible boxes."""
 
@@ -313,10 +289,6 @@ class OpenCVObjectDetector:
         self.model_name = "yolov4-tiny"
         self.model_version = "coco-80"
         self.last_fast_ms = 0.0
-
-    @property
-    def load_error(self) -> str | None:
-        return self._load_error
 
     def _download(self, url: str, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -334,7 +306,13 @@ class OpenCVObjectDetector:
             return self._net
         if self._load_error is not None:
             return None
+        # Two cold callers must not download into the same .part file at once.
+        with opencv_lock:
+            if self._net is not None or self._load_error is not None:
+                return self._net
+            return self._load_locked()
 
+    def _load_locked(self):
         try:
             import cv2
 
@@ -358,11 +336,9 @@ class OpenCVObjectDetector:
             network.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
             network.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
             try:
-                import os
-
-                # One inference at a time (opencv_lock). More threads finish that
-                # pass sooner so a person is boxed before they walk out.
-                cv2.setNumThreads(min(4, os.cpu_count() or 2))
+                # One inference at a time (opencv_lock). OPENCV_THREADS trades
+                # latency for CPU; 2 keeps the box quick without pinning the host.
+                cv2.setNumThreads(int(os.getenv("OPENCV_THREADS", "2")))
             except Exception:
                 pass
             self._net = network
@@ -539,6 +515,14 @@ class LiveDetectionTracker:
         self._labels: dict[str, dict] = {}
         self._stairs_until: dict[str, float] = {}
         self._lock = threading.Lock()
+
+    def forget(self, camera_id: str) -> None:
+        """Drop all state for a camera nobody is watching any more."""
+        key = str(camera_id)
+        with self._lock:
+            self._tracks.pop(key, None)
+            self._labels.pop(key, None)
+            self._stairs_until.pop(key, None)
 
     def update(
         self,
@@ -798,6 +782,9 @@ class LivePersonWatcher:
                 for cid in stale:
                     self._cameras.pop(cid, None)
                     self._latest.pop(cid, None)
+            for cid in stale:
+                live_detection_tracker.forget(cid)
+            with self._lock:
                 cams = [
                     (cid, info["url"], float(info.get("inferred") or 0.0))
                     for cid, info in self._cameras.items()
@@ -808,7 +795,11 @@ class LivePersonWatcher:
                 continue
 
             cams.sort(key=lambda item: item[2])
-            camera_id, url, _inferred = cams[0]
+            camera_id, url, inferred = cams[0]
+            # Cap passes per camera; back-to-back inference pinned a CPU core.
+            wait = LIVE_DETECT_INTERVAL - (time.time() - inferred)
+            if wait > 0:
+                time.sleep(wait)
             try:
                 from .live_stream import live_stream_pool
 
@@ -1034,86 +1025,6 @@ def find_abandoned_bags(
                 "associated": False,
             }
         )
-    return findings
-
-
-def find_fire_smoke_regions(frame) -> list[dict]:
-    """
-    Lightweight illegal fire/smoke hint from color (no extra model).
-    Returns synthetic findings when a strong flame-like blob is visible.
-    """
-    import cv2
-
-    if frame is None or getattr(frame, "size", 0) == 0:
-        return []
-    height, width = frame.shape[:2]
-    small = cv2.resize(frame, (min(320, width), min(240, height)), interpolation=cv2.INTER_AREA)
-    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
-
-    # Flame-like: red/orange/yellow high saturation.
-    mask1 = cv2.inRange(hsv, (0, 120, 120), (18, 255, 255))
-    mask2 = cv2.inRange(hsv, (160, 100, 100), (179, 255, 255))
-    fire_mask = cv2.bitwise_or(mask1, mask2)
-    fire_ratio = float(cv2.countNonZero(fire_mask)) / max(1, fire_mask.size)
-
-    # Smoke-like: gray mid brightness, low saturation, large area.
-    smoke_mask = cv2.inRange(hsv, (0, 0, 60), (180, 50, 200))
-    smoke_ratio = float(cv2.countNonZero(smoke_mask)) / max(1, smoke_mask.size)
-
-    scale_x = width / small.shape[1]
-    scale_y = height / small.shape[0]
-    findings: list[dict] = []
-
-    if fire_ratio >= 0.045:
-        ys, xs = np.where(fire_mask > 0)
-        x1, x2 = int(xs.min() * scale_x), int(xs.max() * scale_x)
-        y1, y2 = int(ys.min() * scale_y), int(ys.max() * scale_y)
-        det = ObjectDetection(
-            x=max(0, x1),
-            y=max(0, y1),
-            width=max(8, x2 - x1),
-            height=max(8, y2 - y1),
-            confidence=min(0.95, 0.55 + fire_ratio * 4),
-            class_name="fire",
-        )
-        findings.append(
-            {
-                "kind": "fire",
-                "weapon_type": "fire",
-                "label": "FIRE",
-                "confidence": det.confidence,
-                "danger": det,
-                "person": None,
-                "associated": False,
-                "event_type": "fire",
-            }
-        )
-
-    if smoke_ratio >= 0.22 and fire_ratio < 0.03:
-        ys, xs = np.where(smoke_mask > 0)
-        if len(xs) > 20:
-            x1, x2 = int(xs.min() * scale_x), int(xs.max() * scale_x)
-            y1, y2 = int(ys.min() * scale_y), int(ys.max() * scale_y)
-            det = ObjectDetection(
-                x=max(0, x1),
-                y=max(0, y1),
-                width=max(8, x2 - x1),
-                height=max(8, y2 - y1),
-                confidence=min(0.9, 0.5 + smoke_ratio),
-                class_name="smoke",
-            )
-            findings.append(
-                {
-                    "kind": "smoke",
-                    "weapon_type": "smoke",
-                    "label": "SMOKE",
-                    "confidence": det.confidence,
-                    "danger": det,
-                    "person": None,
-                    "associated": False,
-                    "event_type": "smoke",
-                }
-            )
     return findings
 
 

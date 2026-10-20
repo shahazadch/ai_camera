@@ -48,6 +48,9 @@ class EvidenceStorage:
     def signed_url(self, key: str, ttl_seconds: int | None = None) -> str:
         raise NotImplementedError
 
+    def delete(self, key: str) -> None:
+        raise NotImplementedError
+
 
 class LocalEvidenceStorage(EvidenceStorage):
     def put(self, key: str, data: bytes, content_type: str = "image/jpeg") -> StoredObject:
@@ -70,6 +73,12 @@ class LocalEvidenceStorage(EvidenceStorage):
     def signed_url(self, key: str, ttl_seconds: int | None = None) -> str:
         base = settings.MEDIA_URL if settings.MEDIA_URL.endswith("/") else settings.MEDIA_URL + "/"
         return urljoin(base, key)
+
+    def delete(self, key: str) -> None:
+        root = Path(settings.MEDIA_ROOT).resolve()
+        path = (root / key).resolve()
+        if root in path.parents:
+            path.unlink(missing_ok=True)
 
 
 class S3EvidenceStorage(EvidenceStorage):
@@ -120,6 +129,9 @@ class S3EvidenceStorage(EvidenceStorage):
             Params={"Bucket": self.bucket, "Key": key},
             ExpiresIn=ttl,
         )
+
+    def delete(self, key: str) -> None:
+        self.client.delete_object(Bucket=self.bucket, Key=key)
 
 
 def get_evidence_storage() -> EvidenceStorage:

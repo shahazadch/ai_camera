@@ -40,9 +40,23 @@ Legacy single PRD: [docs/PRD.md](docs/PRD.md) | [docs/AI-Smart-Security-Platform
 
 ## Quick start (Docker)
 
+On any laptop (Mac, Windows or Linux):
+
+1. Install Docker Desktop and give it at least 4 GB of memory (Settings → Resources).
+2. `git clone` this repo and `cd` into it.
+3. Run:
+
 ```bash
 docker compose up --build
 ```
+
+The first build downloads Python packages and the YOLO model (needs internet, ~5 min).
+After that the app runs fully offline. No `.env` is needed; copy `.env.example` to `.env`
+only to change passwords or tuning.
+
+4. Open http://localhost:3000, log in, and add your camera under **Cameras** with its real
+   RTSP address, e.g. `rtsp://user:pass@192.168.1.64:554/...`. Don't use `localhost`: inside
+   Docker it points at the container, not your laptop.
 
 | Service   | URL                          |
 |-----------|------------------------------|
@@ -53,13 +67,34 @@ docker compose up --build
 
 **Demo login:** `admin` / `admin123`
 
+The default stack is db, redis, backend, a 2-process Celery worker, beat and frontend (~1.2 GB RAM).
+Person detection (YOLOv4-tiny) and known/unknown face recognition (YuNet + SFace) run inside
+the backend, which loads the models once. Optional extras:
+
+```bash
+docker compose --profile storage up -d   # MinIO (set EVIDENCE_STORAGE_BACKEND=minio)
+docker compose --profile edge up -d      # simulated edge service
+```
+
+Tuning env vars: `CAMERA_MONITOR_INTERVAL` (seconds, default 10, `0` = off),
+`CONTINUOUS_RECORDING` (default `False`), `OPENCV_THREADS` (default 2), `LIVE_DETECT_FPS` (person-detection passes per second, default 4).
+
+Inside containers `localhost` is the container itself. Use `host.docker.internal` for a stream on your Mac.
+
+## Lite mode (no Docker, ~0.5 GB)
+
+```bash
+./scripts/run_lite.sh                       # backend on :8000, SQLite, no Redis/Celery
+cd frontend && npm install && npm run dev   # dashboard on :5173
+```
+
 ## Local development (without Docker)
 
 ### Backend
 
 ```bash
 cd backend
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # includes pytest
 cp .env.example .env   # uses SQLite by default
 python manage.py migrate
 python manage.py seed_dev_data

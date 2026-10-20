@@ -197,11 +197,17 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.ops.tasks.drain_recording_queue",
         "schedule": 20.0,
     },
-    "monitor-active-cameras": {
-        "task": "apps.cameras.tasks.monitor_cameras_tick",
-        "schedule": 5.0,
+    "purge-expired-evidence": {
+        "task": "apps.ops.tasks.purge_expired_evidence",
+        "schedule": 3600.0,
     },
 }
+# Camera monitor runs as a thread inside the web process, which already holds
+# the detection and face models. 0 disables it. Running it from Celery loaded a
+# second copy of the models in every worker process.
+CAMERA_MONITOR_INTERVAL = float(os.getenv("CAMERA_MONITOR_INTERVAL", "10"))
+# Always-on per-camera recording threads (camera.auto_record). Off by default to save CPU.
+CONTINUOUS_RECORDING = os.getenv("CONTINUOUS_RECORDING", "False").lower() in ("1", "true", "yes")
 
 # --- M6 Evidence storage (local | s3 | minio) ---
 EVIDENCE_STORAGE_BACKEND = os.getenv("EVIDENCE_STORAGE_BACKEND", "local").lower()

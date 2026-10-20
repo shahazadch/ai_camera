@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ClaudeCodeEditorTabs">
+    <option name="activeSessionId" value="9a80916c-69a8-45f8-af94-b60230efc6aa" />
+    <option name="openSessionIds">
+      <list>
+        <option value="9a80916c-69a8-45f8-af94-b60230efc6aa" />
+      </list>
+    </option>
+    <option name="sessionPaths">
+      <map>
+        <entry key="9a80916c-69a8-45f8-af94-b60230efc6aa" value="/sessions/ac4311dd-a05e-4184-8667-46ee540c7cf6" />
+      </map>
+    </option>
+    <option name="sessionTitles">
+      <map>
+        <entry key="9a80916c-69a8-45f8-af94-b60230efc6aa" value="extensions&gt;=4.16.0 (from anyio-&gt;httpx&lt;1.0,&gt;=0.27-&gt;" />
+      </map>
+    </option>
+  </component>
+</project>

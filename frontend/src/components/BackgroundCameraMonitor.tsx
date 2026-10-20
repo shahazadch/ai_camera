@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
 import { api } from "../api/client";
 import Icon from "./Icon";
 
@@ -11,13 +10,13 @@ type MonitorStatus = {
 };
 
 /**
- * Keeps camera detect + capture running on EVERY page (Events, Unknown, Alerts…).
- * On /cameras the live cards already poll — this runs a lighter background tick
- * everywhere else so monitoring never stops when you leave the camera page.
+ * Shows camera online status in the header. The backend already monitors every
+ * active camera on its own (CAMERA_MONITOR_INTERVAL), so this only refreshes the
+ * pill and never asks for vision analysis.
  */
+const STATUS_INTERVAL_MS = 30000;
+
 export default function BackgroundCameraMonitor() {
-  const location = useLocation();
-  const onCamerasPage = location.pathname.startsWith("/cameras");
   const [status, setStatus] = useState<MonitorStatus>({
     active: false,
     lastOk: 0,
@@ -32,9 +31,13 @@ export default function BackgroundCameraMonitor() {
 
     const tick = async () => {
       if (cancelled || running) return;
+      if (document.hidden) {
+        timer = window.setTimeout(tick, STATUS_INTERVAL_MS);
+        return;
+      }
       running = true;
       try {
-        const result = await api.monitorCamerasTick(!onCamerasPage);
+        const result = await api.monitorCamerasTick(false);
         if (!cancelled) {
           setStatus({
             active: true,
@@ -54,20 +57,17 @@ export default function BackgroundCameraMonitor() {
       } finally {
         running = false;
         if (!cancelled) {
-          // Faster when away from cameras so capture still feels real-time.
-          // On /cameras live cards already run YOLO — tick lightly without vision.
-          const delay = onCamerasPage ? 12000 : 4000;
-          timer = window.setTimeout(tick, delay);
+          timer = window.setTimeout(tick, STATUS_INTERVAL_MS);
         }
       }
     };
 
-    timer = window.setTimeout(tick, onCamerasPage ? 4000 : 800);
+    timer = window.setTimeout(tick, 1500);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [onCamerasPage]);
+  }, []);
 
   if (!status.active && !status.lastAt) return null;
 

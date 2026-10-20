@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -14,9 +15,6 @@ SFACE_CANDIDATES = (
     WEIGHTS_DIR / "face_recognition_sface_2021dec_v2.onnx",
     WEIGHTS_DIR / "face_recognition_sface_2021dec.onnx",
 )
-
-SFACE_MATCH_THRESHOLD = 0.363
-SFACE_DIM = 128
 
 # ArcFace / SFace 112x112 reference landmarks (fallback align only)
 _SFACE_REF = np.array(
@@ -47,8 +45,14 @@ def _sface_path() -> Path | None:
     return None
 
 
+# Monitor thread and request threads share the cached YuNet/SFace objects;
+# setInputSize + detect must not interleave between threads.
+_model_lock = threading.RLock()
+
+
+@lru_cache(maxsize=1)
 def models_available() -> bool:
-    """True only when YuNet + SFace can actually load via OpenCV."""
+    """True only when YuNet + SFace can actually load via OpenCV (checked once)."""
     if not YUNET_PATH.is_file() or _sface_path() is None:
         return False
     try:
@@ -99,9 +103,10 @@ def detect_faces(image_bgr, *, max_faces: int = 5, score_threshold: float = 0.55
         return []
     height, width = image_bgr.shape[:2]
     detector = _detector()
-    detector.setInputSize((width, height))
-    detector.setScoreThreshold(float(score_threshold))
-    _retval, faces = detector.detect(image_bgr)
+    with _model_lock:
+        detector.setInputSize((width, height))
+        detector.setScoreThreshold(float(score_threshold))
+        _retval, faces = detector.detect(image_bgr)
     if faces is None or len(faces) == 0:
         return []
     ranked = sorted(faces, key=lambda row: float(row[-1]), reverse=True)
@@ -114,7 +119,8 @@ def _align_face(image_bgr, face_row) -> np.ndarray:
 
     try:
         recognizer = _recognizer()
-        aligned = recognizer.alignCrop(image_bgr, face_row)
+        with _model_lock:
+            aligned = recognizer.alignCrop(image_bgr, face_row)
         if aligned is not None and getattr(aligned, "size", 0) > 0:
             return aligned
     except Exception:
@@ -139,7 +145,8 @@ def _embed_aligned(aligned_bgr: np.ndarray) -> list[float]:
     import cv2
 
     recognizer = _recognizer()
-    feat = recognizer.feature(aligned_bgr)
+    with _model_lock:
+        feat = recognizer.feature(aligned_bgr)
     feat = np.asarray(feat).reshape(-1).astype(np.float32)
     norm = float(np.linalg.norm(feat)) or 1.0
     return (feat / norm).tolist()
@@ -158,7 +165,9 @@ def scan_and_embed(
     *,
     require_face: bool = True,
     score_threshold: float = 0.45,
+    fallback_thresholds: tuple[float, ...] = (),
 ) -> DetectedFace:
+    """Detect once at the softest threshold, then prefer the strictest tier with a face."""
     import cv2
 
     array = np.frombuffer(image_bytes, dtype=np.uint8)
@@ -166,7 +175,13 @@ def scan_and_embed(
     if image is None or image.size == 0:
         raise ValueError("Could not decode image.")
 
-    faces = detect_faces(image, max_faces=8, score_threshold=float(score_threshold))
+    tiers = (float(score_threshold), *(float(t) for t in fallback_thresholds))
+    all_faces = detect_faces(image, max_faces=8, score_threshold=min(tiers))
+    faces = []
+    for tier in tiers:
+        faces = [row for row in all_faces if float(row[-1]) >= tier]
+        if faces:
+            break
     if not faces:
         if require_face:
             raise ValueError("No face detected. Upload a clear front-facing photo.")

@@ -8,10 +8,8 @@ from apps.alerts.models import AlertRule
 from apps.analytics.models import AnalyticsRule, RiskLevel, RuleAction
 from apps.cameras.models import Camera, EdgeDevice
 from apps.events.models import EventType, Severity
-from apps.identity.embeddings import simulate_embedding_from_bytes
 from apps.identity.models import (
     BiometricConsent,
-    FaceEmbedding,
     Person,
     PersonType,
     VisitorRegistration,
@@ -76,8 +74,11 @@ class Command(BaseCommand):
             name="Lobby Camera 01",
             defaults={
                 "zone": zone,
+                # Placeholder only: inactive so nothing tries to connect until a
+                # real camera URL is entered in the UI.
                 "rtsp_url": "rtsp://demo:demo@localhost:8554/stream",
-                "status": "online",
+                "status": "offline",
+                "is_active": False,
                 "enabled_modules": [
                     "multi_person_tracking",
                     "intrusion_detection",
@@ -217,21 +218,14 @@ class Command(BaseCommand):
                 "shift_end": time(18, 0),
             },
         )
-        consent, _ = BiometricConsent.objects.get_or_create(
+        # No face vector is seeded: a fake one can never match a real face.
+        # Enroll Alice from the People page with real photos instead.
+        BiometricConsent.objects.get_or_create(
             organization=org,
             person=employee,
             consent_type="enrollment",
             defaults={"granted_at": timezone.now()},
         )
-        if not employee.embeddings.exists():
-            FaceEmbedding.objects.create(
-                person=employee,
-                consent=consent,
-                model_name="insightface-sim",
-                model_version="0.1.0",
-                vector=simulate_embedding_from_bytes(b"alice-employee-face"),
-                quality_score=0.9,
-            )
 
         visitor_person, _ = Person.objects.get_or_create(
             organization=org,

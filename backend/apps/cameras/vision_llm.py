@@ -10,6 +10,7 @@ import base64
 import json
 import logging
 import re
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
@@ -60,15 +61,26 @@ def _provider() -> str:
     return (getattr(settings, "VISION_LLM_PROVIDER", "free") or "free").lower()
 
 
+_OLLAMA_PROBE_TTL_SEC = 60.0
+_ollama_probe: tuple[float, bool] = (0.0, False)
+
+
 def _ollama_reachable() -> bool:
+    """Probe at most once a minute; each probe can block up to 2 s."""
+    global _ollama_probe
+    checked_at, reachable = _ollama_probe
+    if time.monotonic() - checked_at < _OLLAMA_PROBE_TTL_SEC:
+        return reachable
     base = (getattr(settings, "VISION_LLM_BASE_URL", "") or "http://127.0.0.1:11434/v1").rstrip("/")
     # OpenAI-compat base ends with /v1 — health is on host root /api/tags
     root = base[:-3] if base.endswith("/v1") else base
     try:
         response = requests.get(f"{root}/api/tags", timeout=2)
-        return response.status_code < 500
+        reachable = response.status_code < 500
     except requests.RequestException:
-        return False
+        reachable = False
+    _ollama_probe = (time.monotonic(), reachable)
+    return reachable
 
 
 def vision_llm_configured() -> bool:

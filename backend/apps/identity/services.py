@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -165,6 +167,7 @@ def enroll_face_bytes(
     FaceEmbedding.objects.filter(person=person, is_active=True).exclude(id__in=active_ids).update(
         is_active=False
     )
+    invalidate_gallery_cache()
 
     return {
         "face_image_id": str(face_image.id),
@@ -331,10 +334,11 @@ def refresh_person_appearance_embeddings(organization_id=None) -> int:
             )
             if alt is not None:
                 face_image = alt
-        if face_image is None:
-            continue
-        raw = _read_face_image_bytes(face_image)
+        raw = _read_face_image_bytes(face_image) if face_image is not None else None
         if not raw:
+            # No source photo to re-embed from: retire it so it isn't retried forever.
+            emb.is_active = False
+            emb.save(update_fields=["is_active", "updated_at"])
             continue
         emb.vector = appearance_embedding_from_bytes(raw)
         emb.face_image = face_image
@@ -373,7 +377,39 @@ def _ensure_mature_identities(organization_id) -> None:
             continue
 
 
+# Per-org gallery cache. Rebuilding (refresh + mature + load) costs hundreds of
+# queries, so it only runs after a Person / FaceEmbedding / FaceImage change
+# (see apps.identity.signals) or when the safety TTL expires.
+_GALLERY_TTL_SEC = 300.0
+_gallery_lock = threading.Lock()
+_gallery_generation = 0
+_gallery_cache: dict[str, tuple[int, float, list]] = {}
+
+
+def invalidate_gallery_cache() -> None:
+    global _gallery_generation
+    with _gallery_lock:
+        _gallery_generation += 1
+        _gallery_cache.clear()
+
+
 def get_gallery(organization_id) -> list[tuple[str, list[float], FaceEmbedding]]:
+    key = str(organization_id)
+    now = time.monotonic()
+    with _gallery_lock:
+        generation = _gallery_generation
+        cached = _gallery_cache.get(key)
+        if cached and cached[0] == generation and now - cached[1] < _GALLERY_TTL_SEC:
+            return cached[2]
+    gallery = _build_gallery(organization_id)
+    with _gallery_lock:
+        # Saves made while building bump the generation; the next call rebuilds
+        # once more and finds nothing left to refresh.
+        _gallery_cache[key] = (generation, now, gallery)
+    return gallery
+
+
+def _build_gallery(organization_id) -> list[tuple[str, list[float], FaceEmbedding]]:
     refresh_person_appearance_embeddings(organization_id)
     try:
         _ensure_mature_identities(organization_id)
@@ -420,7 +456,7 @@ def recognize_embedding(
             for pid, vec, emb in gallery
             if emb.person.person_type in allowed
         ]
-    flat = [(pid, vec) for pid, vec, _ in gallery]
+    flat = [(pid, vec, emb.model_name.endswith("-mature")) for pid, vec, emb in gallery]
     person_id, score = best_match(
         embedding, flat, threshold=threshold, min_margin=min_margin
     )

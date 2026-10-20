@@ -14,6 +14,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Bake YOLOv4-tiny into the image so detection works offline on first start.
+# The model_cache volume is seeded from here when it is first created.
+RUN mkdir -p /app/model_cache/yolov4_tiny && cd /app/model_cache/yolov4_tiny \
+    && python -c "import urllib.request as u; \
+[u.urlretrieve(url, name) for url, name in [\
+('https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov4-tiny.cfg', 'yolov4-tiny.cfg'), \
+('https://github.com/AlexeyAB/darknet/releases/download/yolov4/yolov4-tiny.weights', 'yolov4-tiny.weights'), \
+('https://raw.githubusercontent.com/AlexeyAB/darknet/master/data/coco.names', 'coco.names')]]"
+
 ENV OPENCV_FFMPEG_CAPTURE_OPTIONS=rtsp_transport;tcp|stimeout;8000000|rw_timeout;8000000|max_delay;500000
 
 COPY . .

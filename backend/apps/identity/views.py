@@ -11,7 +11,12 @@ from apps.events.models import EventType, Severity
 from apps.events.pipeline import create_detection_event
 from apps.tenancy.models import Role
 
-from .embeddings import appearance_embedding_from_bytes, simulate_embedding_from_bytes
+from .embeddings import (
+    APPEARANCE_MODEL,
+    APPEARANCE_VERSION,
+    DEFAULT_MATCH_THRESHOLD,
+    appearance_embedding_from_bytes,
+)
 from .models import (
     AttendanceRecord,
     BiometricConsent,
@@ -40,10 +45,20 @@ from .services import (
     create_unknown_sighting,
     enroll_face_bytes,
     handle_visitor_face_match,
+    invalidate_gallery_cache,
     mature_person_identity,
     recognize_embedding,
     record_attendance,
 )
+
+
+def _clamp_threshold(value) -> float:
+    """SFace cosine for the same person sits around 0.36-0.6; keep client values sane."""
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MATCH_THRESHOLD
+    return min(0.6, max(0.25, threshold))
 
 
 class PersonListCreateView(TenantQuerysetMixin, generics.ListCreateAPIView):
@@ -189,6 +204,7 @@ class FaceEnrollView(APIView):
             # Roll back only embeddings from this failed attempt.
             if created_embedding_ids:
                 FaceEmbedding.objects.filter(id__in=created_embedding_ids).update(is_active=False)
+                invalidate_gallery_cache()
             detail = (
                 "; ".join(f"{e['angle']}: {e['detail']}" for e in errors)
                 if errors
@@ -318,7 +334,7 @@ class FaceMatchView(APIView):
             return Response({"detail": "embedding or image required"}, status=400)
 
         person, score, _emb = recognize_embedding(
-            organization.id, embedding, threshold=data.get("threshold", 0.72)
+            organization.id, embedding, threshold=_clamp_threshold(data.get("threshold"))
         )
 
         if person and person.person_type == PersonType.BLACKLIST:
@@ -332,8 +348,8 @@ class FaceMatchView(APIView):
                     event_type=EventType.UNKNOWN_PERSON,
                     severity=Severity.CRITICAL,
                     confidence=score,
-                    model_name="insightface",
-                    model_version="m3",
+                    model_name=APPEARANCE_MODEL,
+                    model_version=APPEARANCE_VERSION,
                     payload={
                         "person_id": str(person.id),
                         "person_type": "blacklist",
@@ -368,8 +384,8 @@ class FaceMatchView(APIView):
                     event_type=EventType.FACE_RECOGNIZED,
                     severity=Severity.INFO,
                     confidence=score,
-                    model_name="insightface",
-                    model_version="m3",
+                    model_name=APPEARANCE_MODEL,
+                    model_version=APPEARANCE_VERSION,
                     payload={
                         "person_id": str(person.id),
                         "full_name": person.full_name,
@@ -421,8 +437,8 @@ class FaceMatchView(APIView):
                     event_type=EventType.UNKNOWN_PERSON,
                     severity=Severity.WARNING,
                     confidence=data.get("confidence") or score,
-                    model_name="insightface",
-                    model_version="m3",
+                    model_name=APPEARANCE_MODEL,
+                    model_version=APPEARANCE_VERSION,
                     payload={"track_id": data.get("track_id"), "match_score": score, "unknown": True},
                     edge_device=edge_device,
                 ).event

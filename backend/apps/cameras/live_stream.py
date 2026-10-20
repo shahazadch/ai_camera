@@ -93,8 +93,16 @@ class _StreamWorker:
         return frame
 
     def get_jpeg(self, max_age_sec: float = 2.5) -> bytes:
+        """Encode lazily: only previews need JPEG, detection reads raw frames."""
+        import cv2
+
         self.touch()
         with self._lock:
+            if self._jpeg is None and self._frame is not None:
+                ok_jpg, encoded = cv2.imencode(
+                    ".jpg", self._frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
+                )
+                self._jpeg = encoded.tobytes() if ok_jpg else None
             jpeg = self._jpeg
             age = time.monotonic() - self._frame_at if jpeg is not None else 1e9
             err = self._error
@@ -107,8 +115,6 @@ class _StreamWorker:
         return jpeg
 
     def _run(self) -> None:
-        import cv2
-
         from apps.cameras.rtsp_open import open_rtsp_capture
 
         capture = None
@@ -145,14 +151,9 @@ class _StreamWorker:
                 if not ok or frame is None:
                     raise RuntimeError("Stream opened but no frame received.")
 
-                ok_jpg, encoded = cv2.imencode(
-                    ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
-                )
-                jpeg = encoded.tobytes() if ok_jpg else None
-
                 with self._lock:
                     self._frame = frame
-                    self._jpeg = jpeg
+                    self._jpeg = None
                     self._frame_at = time.monotonic()
                     self._error = ""
                 self._stop.wait(interval)

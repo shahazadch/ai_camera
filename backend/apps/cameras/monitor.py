@@ -49,7 +49,7 @@ def monitor_active_cameras(
             "vision": None,
         }
         try:
-            frame, _, _, _ = _capture_frame(camera.rtsp_url)
+            frame, _, _, _ = _capture_frame(camera.rtsp_url, prefer_fast=True)
             persons, labels, verify = _detect_and_record(frame, camera)
             entry["persons"] = persons
             entry["objects"] = labels

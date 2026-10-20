@@ -40,6 +40,10 @@ const EMPTY_FORM: CameraForm = {
 };
 
 const LIVE_PREVIEW_STORAGE_KEY = "sentinelvision.live-camera-ids";
+// ~5 fps preview per camera. Each frame is a backend request + JPEG decode.
+const FRAME_INTERVAL_MS = 200;
+// Name check. Boxes already come from the backend watcher on every frame.
+const DETECT_INTERVAL_MS = 2000;
 
 function getSavedPreviewIds(): Set<string> {
   try {
@@ -92,6 +96,7 @@ function LiveCameraCard({
     let cancelled = false;
     let currentUrl = "";
     let nextFrameTimer = 0;
+    let stairsTimer = 0;
     let paintCtrl: AbortController | null = null;
     let inFlight = false;
     setLoading(true);
@@ -100,14 +105,14 @@ function LiveCameraCard({
     const loadFrame = async () => {
       if (cancelled) return;
       if (inFlight) {
-        nextFrameTimer = window.setTimeout(loadFrame, 40);
+        nextFrameTimer = window.setTimeout(loadFrame, 100);
         return;
       }
       inFlight = true;
       paintCtrl?.abort();
       paintCtrl = new AbortController();
       const abortTimer = window.setTimeout(() => paintCtrl?.abort(), 4000);
-      let retryMs = 70;
+      let retryMs = FRAME_INTERVAL_MS;
       let stopPolling = false;
       try {
         const { blob, objects, stairsAlert: stairsNow, verify: nextVerify } = await api.getCameraFrame(
@@ -125,7 +130,8 @@ function LiveCameraCard({
           }
         }
         if (!stairsNow && stairsOn.current) {
-          window.setTimeout(() => setStairsAlert(false), 2200);
+          window.clearTimeout(stairsTimer);
+          stairsTimer = window.setTimeout(() => setStairsAlert(false), 2200);
         }
         stairsOn.current = stairsNow;
         const nextUrl = URL.createObjectURL(blob);
@@ -146,7 +152,6 @@ function LiveCameraCard({
           setVerify(nextVerify);
         }
         setFrameError("");
-        retryMs = 50;
       } catch (err) {
         if (cancelled) return;
         const status = (err as { status?: number } | null)?.status;
@@ -164,7 +169,8 @@ function LiveCameraCard({
         if (!cancelled) {
           setLoading(false);
           if (!stopPolling) {
-            nextFrameTimer = window.setTimeout(loadFrame, retryMs);
+            // Background tabs don't need fresh frames; check back once a second.
+            nextFrameTimer = window.setTimeout(loadFrame, document.hidden ? 1000 : retryMs);
           }
         }
       }
@@ -175,6 +181,7 @@ function LiveCameraCard({
       cancelled = true;
       paintCtrl?.abort();
       window.clearTimeout(nextFrameTimer);
+      window.clearTimeout(stairsTimer);
       if (currentUrl) URL.revokeObjectURL(currentUrl);
     };
   }, [active, camera.id]);
@@ -206,7 +213,7 @@ function LiveCameraCard({
         if (!cancelled) {
           // Name check. The box is already painted by the fast watcher, so this
           // does not need to run on every frame.
-          detectTimer = window.setTimeout(runDetect, 700);
+          detectTimer = window.setTimeout(runDetect, document.hidden ? 5000 : DETECT_INTERVAL_MS);
         }
       }
     };

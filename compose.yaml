@@ -3,7 +3,7 @@ services:
     image: postgres:15-alpine
     environment:
       POSTGRES_USER: sentinel
-      POSTGRES_PASSWORD: sentinel
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinel}
       POSTGRES_DB: sentinelvision
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -12,13 +12,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-    ports:
-      - "5432:5432"
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -26,11 +22,12 @@ services:
       retries: 5
 
   minio:
+    profiles: ["storage"]
     image: docker.io/pgsty/silo:RELEASE.2026-09-16T00-00-00Z
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -47,20 +44,26 @@ services:
     build: ./backend
     image: sentinelvision-backend:local
     environment:
-      SECRET_KEY: dev-insecure-change-me-in-production
+      SECRET_KEY: ${SECRET_KEY:-dev-insecure-change-me-in-production}
       DEBUG: "True"
-      ALLOWED_HOSTS: localhost,127.0.0.1,backend
-      DATABASE_URL: postgres://sentinel:sentinel@db:5432/sentinelvision
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
+      DATABASE_URL: postgres://sentinel:${POSTGRES_PASSWORD:-sentinel}@db:5432/sentinelvision
       CORS_ALLOWED_ORIGINS: http://localhost:5173,http://localhost:3000,http://frontend
-      EDGE_API_KEY: edge-dev-api-key-change-in-production
+      EDGE_API_KEY: ${EDGE_API_KEY:-edge-dev-api-key-change-in-production}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_TASK_ALWAYS_EAGER: "False"
-      EVIDENCE_STORAGE_BACKEND: minio
+      EVIDENCE_STORAGE_BACKEND: ${EVIDENCE_STORAGE_BACKEND:-local}
       AWS_S3_ENDPOINT_URL: http://minio:9000
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       AWS_STORAGE_BUCKET_NAME: sentinelvision-evidence
+      CAMERA_MONITOR_INTERVAL: ${CAMERA_MONITOR_INTERVAL:-10}
+      CONTINUOUS_RECORDING: ${CONTINUOUS_RECORDING:-False}
+      OPENCV_THREADS: ${OPENCV_THREADS:-2}
+      VISION_LLM_BASE_URL: ${VISION_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      LIVE_DETECT_FPS: ${LIVE_DETECT_FPS:-4}
+    mem_limit: 1g
     ports:
       - "8000:8000"
     volumes:
@@ -73,8 +76,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
-        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/ready/')"]
       interval: 10s
@@ -86,18 +87,19 @@ services:
   celery_worker:
     image: sentinelvision-backend:local
     pull_policy: never
-    command: celery -A config worker -l info -Q default,notifications,recordings,siem
+    command: celery -A config worker -l info -Q default,notifications,recordings,siem --concurrency=2 --max-tasks-per-child=200
+    mem_limit: 512m
     environment:
-      SECRET_KEY: dev-insecure-change-me-in-production
+      SECRET_KEY: ${SECRET_KEY:-dev-insecure-change-me-in-production}
       DEBUG: "True"
-      DATABASE_URL: postgres://sentinel:sentinel@db:5432/sentinelvision
+      DATABASE_URL: postgres://sentinel:${POSTGRES_PASSWORD:-sentinel}@db:5432/sentinelvision
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_TASK_ALWAYS_EAGER: "False"
-      EVIDENCE_STORAGE_BACKEND: minio
+      EVIDENCE_STORAGE_BACKEND: ${EVIDENCE_STORAGE_BACKEND:-local}
       AWS_S3_ENDPOINT_URL: http://minio:9000
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       AWS_STORAGE_BUCKET_NAME: sentinelvision-evidence
       EMAIL_BACKEND: django.core.mail.backends.console.EmailBackend
     volumes:
@@ -118,10 +120,11 @@ services:
     image: sentinelvision-backend:local
     pull_policy: never
     command: celery -A config beat -l info
+    mem_limit: 256m
     environment:
-      SECRET_KEY: dev-insecure-change-me-in-production
+      SECRET_KEY: ${SECRET_KEY:-dev-insecure-change-me-in-production}
       DEBUG: "True"
-      DATABASE_URL: postgres://sentinel:sentinel@db:5432/sentinelvision
+      DATABASE_URL: postgres://sentinel:${POSTGRES_PASSWORD:-sentinel}@db:5432/sentinelvision
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_TASK_ALWAYS_EAGER: "False"
@@ -140,11 +143,13 @@ services:
       backend:
         condition: service_healthy
 
+  # Simulated detector; real detection runs in the backend. Opt in with --profile edge.
   edge:
+    profiles: ["edge"]
     build: ./edge
     environment:
       API_BASE_URL: http://backend:8000/api/v1
-      EDGE_API_KEY: edge-dev-api-key-change-in-production
+      EDGE_API_KEY: ${EDGE_API_KEY:-edge-dev-api-key-change-in-production}
       HEARTBEAT_INTERVAL: 30
       SIMULATION_INTERVAL: 15
       EDGE_VERSION: 0.2.0-m2

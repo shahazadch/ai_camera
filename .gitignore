@@ -16,3 +16,4 @@ edge/.pytest_cache/
 *.egg-info/
 .DS_Store
 .env
+*.tsbuildinfo
