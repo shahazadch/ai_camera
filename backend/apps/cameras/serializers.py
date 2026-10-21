@@ -31,6 +31,9 @@ class CameraSerializer(serializers.ModelSerializer):
             "metadata",
             "is_active",
             "auto_record",
+            "person_alert_enabled",
+            "person_alert_start",
+            "person_alert_end",
             "created_at",
             "updated_at",
         )
@@ -45,6 +48,17 @@ class CameraSerializer(serializers.ModelSerializer):
                 "Enter a valid camera URL (rtsp://, rtsps://, http:// or https://)."
             )
         return value.strip()
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        instance = self.instance
+        start = attrs.get("person_alert_start", getattr(instance, "person_alert_start", None))
+        end = attrs.get("person_alert_end", getattr(instance, "person_alert_end", None))
+        if (start is None) != (end is None):
+            raise serializers.ValidationError(
+                {"person_alert_end": "Set both From and To, or leave both empty for all day."}
+            )
+        return attrs
 
 
 class EdgeCameraSerializer(CameraSerializer):

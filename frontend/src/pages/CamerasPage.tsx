@@ -22,7 +22,15 @@ type CameraForm = {
   enabled_modules: string[];
   is_active: boolean;
   auto_record: boolean;
+  person_alert_enabled: boolean;
+  person_alert_start: string;
+  person_alert_end: string;
 };
+
+/** "22:00:00" → "22:00" for <input type="time"> and badges. */
+function hhmm(value: string | null | undefined): string {
+  return value ? value.slice(0, 5) : "";
+}
 
 const EMPTY_FORM: CameraForm = {
   name: "",
@@ -37,6 +45,9 @@ const EMPTY_FORM: CameraForm = {
   ],
   is_active: true,
   auto_record: true,
+  person_alert_enabled: false,
+  person_alert_start: "",
+  person_alert_end: "",
 };
 
 const LIVE_PREVIEW_STORAGE_KEY = "sentinelvision.live-camera-ids";
@@ -444,6 +455,9 @@ export default function CamerasPage() {
       enabled_modules: camera.enabled_modules || [],
       is_active: camera.is_active,
       auto_record: camera.auto_record !== false,
+      person_alert_enabled: Boolean(camera.person_alert_enabled),
+      person_alert_start: hhmm(camera.person_alert_start),
+      person_alert_end: hhmm(camera.person_alert_end),
     });
     setError("");
     setMessage("");
@@ -456,13 +470,22 @@ export default function CamerasPage() {
       setError("Name, site and stream URL are required.");
       return;
     }
+    if (Boolean(form.person_alert_start) !== Boolean(form.person_alert_end)) {
+      setError("Set both From and To for the person alert, or leave both empty for all day.");
+      return;
+    }
     setSaving(true);
     setError("");
     // Pause live RTSP pulls so Save is not stuck behind stream timeouts.
     const resumePreviews = new Set(previewIds);
     setPreviewIds(new Set());
     try {
-      const payload = { ...form, zone: form.zone || null };
+      const payload = {
+        ...form,
+        zone: form.zone || null,
+        person_alert_start: form.person_alert_start || null,
+        person_alert_end: form.person_alert_end || null,
+      };
       if (editing) await api.updateCamera(editing.id, payload);
       else await api.createCamera(payload);
       setFormOpen(false);
@@ -595,6 +618,7 @@ export default function CamerasPage() {
                 <th>Status</th>
                 <th>Stream</th>
                 <th>Auto REC</th>
+                <th>Person alert</th>
                 <th>AI Modules</th>
                 <th>Last Seen</th>
                 <th>Actions</th>
@@ -610,6 +634,15 @@ export default function CamerasPage() {
                   <td>
                     <span className={`badge ${camera.auto_record ? "online" : "offline"}`}>
                       {recordingIds.has(camera.id) ? "Recording" : camera.auto_record ? "On" : "Off"}
+                    </span>
+                  </td>
+                  <td>
+                    <span className={`badge ${camera.person_alert_enabled ? "online" : "offline"}`}>
+                      {!camera.person_alert_enabled
+                        ? "Off"
+                        : camera.person_alert_start && camera.person_alert_end
+                          ? `🔔 ${hhmm(camera.person_alert_start)}–${hhmm(camera.person_alert_end)}`
+                          : "🔔 All day"}
                     </span>
                   </td>
                   <td>{camera.enabled_modules?.length || 0} enabled</td>
@@ -730,6 +763,39 @@ export default function CamerasPage() {
               />
               <span>Auto record video continuously (rolling clips every ~60s)</span>
             </label>
+
+            <label className="check-option active-camera-option">
+              <input
+                type="checkbox"
+                checked={form.person_alert_enabled}
+                onChange={(e) => setForm({ ...form, person_alert_enabled: e.target.checked })}
+              />
+              <span>Play sound when a person appears</span>
+            </label>
+            {form.person_alert_enabled && (
+              <div className="person-alert-window">
+                <label>
+                  From
+                  <input
+                    type="time"
+                    value={form.person_alert_start}
+                    onChange={(e) => setForm({ ...form, person_alert_start: e.target.value })}
+                  />
+                </label>
+                <label>
+                  To
+                  <input
+                    type="time"
+                    value={form.person_alert_end}
+                    onChange={(e) => setForm({ ...form, person_alert_end: e.target.value })}
+                  />
+                </label>
+                <p className="muted">
+                  Pakistan time. Leave both empty to alert all day; e.g. 22:00 → 06:00 covers the night.
+                  Sound plays through scripts/alert_player.py on this computer.
+                </p>
+              </div>
+            )}
 
             <div className="modal-actions">
               <button type="button" className="btn secondary" onClick={() => setFormOpen(false)}>Cancel</button>

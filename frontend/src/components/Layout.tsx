@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation, Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { unlockStairsAlert } from "../stairsAlert";
 import BackgroundCameraMonitor from "./BackgroundCameraMonitor";
+import PersonAlertListener from "./PersonAlertListener";
 import Icon from "./Icon";
 
 type NavItem = { to: string; label: string; icon: string; end?: boolean };
@@ -183,6 +184,7 @@ export default function Layout() {
                   <span className="live-dot" /> Live
                 </span>
                 <BackgroundCameraMonitor />
+                <PersonAlertListener />
               </div>
             </div>
           </div>

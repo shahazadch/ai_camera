@@ -346,6 +346,57 @@ class CameraRecorderStatusView(APIView):
         return Response(status)
 
 
+class CameraPersonAlertsView(APIView):
+    """
+    Arrival counters for cameras with the person-alert sound on.
+
+    Polled by the browser (logged-in user, own org) and by scripts/alert_player.py
+    on the host (X-Alert-Key, all cameras) so a sound plays with no page open.
+    The client plays when ``seq`` grows while ``active`` is true.
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        import hmac
+
+        from django.conf import settings
+
+        from .detection import live_detection_tracker
+
+        cameras = Camera.objects.filter(is_active=True, person_alert_enabled=True)
+        alert_key = request.headers.get("X-Alert-Key", "")
+        if alert_key:
+            if not hmac.compare_digest(alert_key, settings.ALERT_PLAYER_KEY):
+                return Response({"detail": "Invalid alert key."}, status=status.HTTP_403_FORBIDDEN)
+        elif request.user and request.user.is_authenticated and not isinstance(
+            request.user, EdgeServiceUser
+        ):
+            org_ids = request.user.memberships.values_list("organization_id", flat=True)
+            cameras = cameras.filter(site__organization_id__in=list(org_ids))
+        else:
+            return Response(
+                {"detail": "Authentication credentials were not provided."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        now = timezone.now()
+        return Response(
+            {
+                "time_zone": settings.ALERT_TIME_ZONE,
+                "cameras": [
+                    {
+                        "camera_id": str(camera.id),
+                        "name": camera.name,
+                        "seq": live_detection_tracker.arrival_seq(str(camera.id)),
+                        "active": camera.person_alert_active(now),
+                    }
+                    for camera in cameras
+                ],
+            }
+        )
+
+
 class CameraVisionAnalyzeView(APIView):
     """Capture a live frame, analyze with a vision LLM, and persist the capture."""
 

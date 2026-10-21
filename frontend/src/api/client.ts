@@ -40,6 +40,9 @@ export interface Camera {
   last_seen_at: string | null;
   is_active: boolean;
   auto_record: boolean;
+  person_alert_enabled: boolean;
+  person_alert_start: string | null;
+  person_alert_end: string | null;
   metadata: Record<string, unknown>;
   zone_name?: string | null;
   zone_polygon?: number[][] | null;
@@ -467,6 +470,13 @@ class ApiClient {
 
   getCameras() {
     return this.request<Paginated<Camera>>("/cameras/");
+  }
+
+  getPersonAlerts() {
+    return this.request<{
+      time_zone: string;
+      cameras: Array<{ camera_id: string; name: string; seq: number; active: boolean }>;
+    }>("/cameras/person-alerts/");
   }
 
   monitorCamerasTick(vision = true) {

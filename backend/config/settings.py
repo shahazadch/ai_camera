@@ -207,6 +207,10 @@ CELERY_BEAT_SCHEDULE = {
 # second copy of the models in every worker process.
 CAMERA_MONITOR_INTERVAL = float(os.getenv("CAMERA_MONITOR_INTERVAL", "10"))
 # Always-on per-camera recording threads (camera.auto_record). Off by default to save CPU.
+# Wall-clock zone for per-camera person-alert windows (server runs in UTC).
+ALERT_TIME_ZONE = os.getenv("ALERT_TIME_ZONE", "Asia/Karachi")
+# Shared secret for scripts/alert_player.py, which plays sounds on the host.
+ALERT_PLAYER_KEY = os.getenv("ALERT_PLAYER_KEY", "alert-dev-key-change-me")
 CONTINUOUS_RECORDING = os.getenv("CONTINUOUS_RECORDING", "False").lower() in ("1", "true", "yes")
 
 # --- M6 Evidence storage (local | s3 | minio) ---

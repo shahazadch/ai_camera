@@ -514,6 +514,9 @@ class LiveDetectionTracker:
         self._tracks: dict[str, list[dict]] = {}
         self._labels: dict[str, dict] = {}
         self._stairs_until: dict[str, float] = {}
+        # Per-camera count of people who have walked into view (person alerts).
+        # A counter, not a pulse, so a poller can't miss an arrival between polls.
+        self._arrivals: dict[str, int] = {}
         self._lock = threading.Lock()
 
     def forget(self, camera_id: str) -> None:
@@ -523,6 +526,7 @@ class LiveDetectionTracker:
             self._tracks.pop(key, None)
             self._labels.pop(key, None)
             self._stairs_until.pop(key, None)
+            self._arrivals.pop(key, None)
 
     def update(
         self,
@@ -624,6 +628,7 @@ class LiveDetectionTracker:
                             "seen_at": now,
                             "first_seen": float(prev.get("first_seen") or prev.get("seen_at") or now),
                             "stairs_alerted": bool(prev.get("stairs_alerted")),
+                            "arrival_counted": bool(prev.get("arrival_counted")),
                             "label": next_label,
                         }
                     )
@@ -637,6 +642,7 @@ class LiveDetectionTracker:
                             "seen_at": now,
                             "first_seen": now,
                             "stairs_alerted": False,
+                            "arrival_counted": False,
                             "label": label_info,
                         }
                     )
@@ -655,6 +661,17 @@ class LiveDetectionTracker:
                 if miss > miss_limit:
                     continue
                 next_tracks.append({**track, "miss": miss})
+
+            # A person seen on 2 passes counts as one arrival; a single-frame
+            # YOLO hit does not.
+            for track in next_tracks:
+                if (
+                    track.get("class_name") == "person"
+                    and not track.get("arrival_counted")
+                    and int(track.get("hits", 0)) >= 2
+                ):
+                    track["arrival_counted"] = True
+                    self._arrivals[key] = self._arrivals.get(key, 0) + 1
 
             # Someone just stepped in from the bottom of the frame (stairs).
             # Pulse is short so the live view can sound the alert immediately.
@@ -691,6 +708,11 @@ class LiveDetectionTracker:
                 "class_names": list(dict.fromkeys(t["class_name"] for t in confirmed)),
             }
             return sticky_dets, sticky_labels
+
+    def arrival_seq(self, camera_id: str) -> int:
+        """How many people have walked into this camera's view since startup."""
+        with self._lock:
+            return int(self._arrivals.get(str(camera_id), 0))
 
     def stairs_hot(self, camera_id: str) -> bool:
         """True for a short moment after a person enters from the bottom."""

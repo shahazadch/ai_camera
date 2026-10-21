@@ -81,6 +81,26 @@ Tuning env vars: `CAMERA_MONITOR_INTERVAL` (seconds, default 10, `0` = off),
 
 Inside containers `localhost` is the container itself. Use `host.docker.internal` for a stream on your Mac.
 
+## Person alert sound
+
+Each camera can play a sound when **any person** walks into view, optionally only between
+two times (Pakistan time, `ALERT_TIME_ZONE`). Turn it on in **Cameras → Edit → Play sound
+when a person appears**, then set From/To. Leave both times empty for all day; `22:00 → 06:00` covers
+the night.
+
+Docker can't use your speakers, so a small player runs on the laptop itself (Python 3, no installs).
+It works with no browser open:
+
+```bash
+python3 scripts/alert_player.py --test          # hear the chime once
+python3 scripts/alert_player.py                 # run (Ctrl+C to stop)
+./scripts/install_alert_player_mac.sh           # macOS: start automatically at login
+./scripts/install_alert_player_mac.sh --uninstall
+```
+
+If you set `ALERT_PLAYER_KEY` in `.env`, pass the same value with `--key` (or the
+`ALERT_PLAYER_KEY` env var). An open dashboard also shows a silent "Person on …" pop-up.
+
 ## Lite mode (no Docker, ~0.5 GB)
 
 ```bash
