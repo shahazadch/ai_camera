@@ -125,6 +125,56 @@ def _nms(detections: list[ObjectDetection], iou_threshold: float = 0.4) -> list[
     return kept
 
 
+# Per-camera "person detection sensitivity" → lowest person confidence accepted.
+PERSON_SENSITIVITY = {"high": 0.20, "normal": 0.35, "strict": 0.50}
+DEFAULT_PERSON_SENSITIVITY = "high"
+
+
+def person_sensitivity(camera) -> str:
+    value = ((getattr(camera, "metadata", None) or {}).get("person_sensitivity") or "").lower()
+    return value if value in PERSON_SENSITIVITY else DEFAULT_PERSON_SENSITIVITY
+
+
+def person_min_confidence(camera) -> float:
+    return PERSON_SENSITIVITY[person_sensitivity(camera)]
+
+
+def drop_weak_persons(detections: list, min_confidence: float) -> list:
+    return [
+        det for det in detections if det.class_name not in PERSON_CLASSES or det.confidence >= min_confidence
+    ]
+
+
+def _covered_fraction(inner: "ObjectDetection", outer: "ObjectDetection") -> float:
+    """Share of ``inner``'s area that lies inside ``outer``."""
+    x1, y1 = max(inner.x, outer.x), max(inner.y, outer.y)
+    x2 = min(inner.x + inner.width, outer.x + outer.width)
+    y2 = min(inner.y + inner.height, outer.y + outer.height)
+    overlap = max(0, x2 - x1) * max(0, y2 - y1)
+    return overlap / max(1, inner.width * inner.height)
+
+
+def _suppress_animal_persons(detections: list) -> list:
+    """
+    YOLO sometimes calls a cow/dog "person" at low confidence while also seeing
+    the animal in the same place. Drop that weak person box; a confident person
+    standing next to an animal keeps theirs.
+    """
+    animals = [det for det in detections if det.class_name in ANIMAL_CLASSES]
+    if not animals:
+        return detections
+    kept = []
+    for det in detections:
+        if (
+            det.class_name in PERSON_CLASSES
+            and det.confidence < 0.6
+            and any(_covered_fraction(det, animal) >= 0.6 for animal in animals)
+        ):
+            continue
+        kept.append(det)
+    return kept
+
+
 def _min_confidence(class_name: str) -> float:
     """Accuracy-first thresholds — prefer correct name over extra boxes."""
     if class_name in PERSON_CLASSES:
@@ -474,7 +524,7 @@ class OpenCVObjectDetector:
                 working = self._enhance(frame)
             raw = self._infer_single(working, confidence_threshold, input_size=input_size)
             candidates = [det for det in raw if _is_plausible_box(det, orig_w, orig_h)]
-            deduped = _nms(candidates, iou_threshold=0.45)
+            deduped = _suppress_animal_persons(_nms(candidates, iou_threshold=0.45))
             if focus:
                 deduped = _focus_only(deduped, orig_w, orig_h)
             self.last_fast_ms = (time.perf_counter() - started) * 1000.0
@@ -768,7 +818,7 @@ class LivePersonWatcher:
         thread = self._thread
         return bool(thread and thread.is_alive())
 
-    def touch(self, camera_id: str, source_url: str) -> None:
+    def touch(self, camera_id: str, source_url: str, min_person_confidence: float = 0.20) -> None:
         if not camera_id or not source_url:
             return
         now = time.time()
@@ -779,10 +829,12 @@ class LivePersonWatcher:
                     "url": source_url,
                     "touched": now,
                     "inferred": 0.0,
+                    "min_person": min_person_confidence,
                 }
             else:
                 current["url"] = source_url
                 current["touched"] = now
+                current["min_person"] = min_person_confidence
             if not self.running:
                 self._thread = threading.Thread(
                     target=self._loop, name="live-person-watch", daemon=True
@@ -814,7 +866,7 @@ class LivePersonWatcher:
                 live_detection_tracker.forget(cid)
             with self._lock:
                 cams = [
-                    (cid, info["url"], float(info.get("inferred") or 0.0))
+                    (cid, info["url"], float(info.get("inferred") or 0.0), float(info.get("min_person") or 0.2))
                     for cid, info in self._cameras.items()
                     if info.get("url")
                 ]
@@ -823,7 +875,7 @@ class LivePersonWatcher:
                 continue
 
             cams.sort(key=lambda item: item[2])
-            camera_id, url, inferred = cams[0]
+            camera_id, url, inferred, min_person = cams[0]
             # Cap passes per camera; back-to-back inference pinned a CPU core.
             wait = LIVE_DETECT_INTERVAL - (time.time() - inferred)
             if wait > 0:
@@ -838,7 +890,9 @@ class LivePersonWatcher:
                 input_size = 320
                 if self._pass % 4 == 0 and object_detector.last_fast_ms < 180:
                     input_size = 416
-                detections = object_detector.detect_fast(frame, input_size=input_size)
+                detections = drop_weak_persons(
+                    object_detector.detect_fast(frame, input_size=input_size), min_person
+                )
                 overlay = [
                     det
                     for det in detections
@@ -894,7 +948,7 @@ def boot_person_watcher() -> None:
             from apps.cameras.models import Camera
 
             for camera in Camera.objects.filter(is_active=True).exclude(rtsp_url=""):
-                live_person_watcher.touch(str(camera.id), camera.rtsp_url)
+                live_person_watcher.touch(str(camera.id), camera.rtsp_url, person_min_confidence(camera))
         except Exception:
             logger.debug("Person watcher boot skipped", exc_info=True)
 

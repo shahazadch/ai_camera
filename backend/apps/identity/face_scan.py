@@ -19,6 +19,8 @@ class FaceScanResult:
     used_full_image: bool = False
     feature: list[float] = field(default_factory=list)
     engine: str = "haar"
+    # YuNet detection confidence; 0 for the Haar fallback (which has none).
+    face_score: float = 0.0
 
 
 def _blur_score(gray) -> float:
@@ -89,6 +91,7 @@ def scan_face_from_bytes(
                     face_jpeg=detected.crop_jpeg,
                     face_count=1,
                     quality_score=max(quality, float(detected.score)),
+                    face_score=float(detected.score),
                     blur_score=blur,
                     bbox=detected.bbox,
                     used_full_image=False,

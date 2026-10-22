@@ -23,6 +23,7 @@ type CameraForm = {
   is_active: boolean;
   auto_record: boolean;
   rule_ids: string[];
+  person_sensitivity: "high" | "normal" | "strict";
 };
 
 const EMPTY_FORM: CameraForm = {
@@ -40,6 +41,7 @@ const EMPTY_FORM: CameraForm = {
   is_active: true,
   auto_record: true,
   rule_ids: [],
+  person_sensitivity: "high",
 };
 
 const LIVE_PREVIEW_STORAGE_KEY = "sentinelvision.live-camera-ids";
@@ -453,6 +455,7 @@ export default function CamerasPage() {
       is_active: camera.is_active,
       auto_record: camera.auto_record !== false,
       rule_ids: (camera.rule_ids || []).map(String),
+      person_sensitivity: camera.person_sensitivity || "high",
     });
     setError("");
     setMessage("");
@@ -755,6 +758,24 @@ export default function CamerasPage() {
                 onChange={(e) => setForm({ ...form, auto_record: e.target.checked })}
               />
               <span>Auto record video continuously (rolling clips every ~60s)</span>
+            </label>
+
+            <label className="full-field sensitivity-field">
+              Person detection sensitivity
+              <select
+                value={form.person_sensitivity}
+                onChange={(e) =>
+                  setForm({ ...form, person_sensitivity: e.target.value as CameraForm["person_sensitivity"] })
+                }
+              >
+                <option value="high">High: catch people instantly (indoor, offices)</option>
+                <option value="normal">Normal: fewer false alarms</option>
+                <option value="strict">Strict: ignore weak guesses (farms, animals, outdoor)</option>
+              </select>
+              <small className="muted">
+                On every setting, UNKNOWN needs a clear human face. Strict also stops weak guesses (often animals at
+                night) from being boxed as a person.
+              </small>
             </label>
 
             <fieldset className="module-picker">

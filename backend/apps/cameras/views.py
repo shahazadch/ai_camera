@@ -170,10 +170,10 @@ class CameraFrameView(APIView):
         verify = {"verified": 0, "unknown": 0, "blacklist": 0, "labels": [], "issues": [], "dangers": 0}
         # Keep the fast person loop alive while this camera is on screen.
         try:
-            from .detection import live_person_watcher
+            from .detection import live_person_watcher, person_min_confidence
 
             if camera.rtsp_url:
-                live_person_watcher.touch(str(camera.id), camera.rtsp_url)
+                live_person_watcher.touch(str(camera.id), camera.rtsp_url, person_min_confidence(camera))
         except Exception:
             pass
 
@@ -874,6 +874,9 @@ _IDENTITY_HOLD_SEC = 8.0
 _IDENTITY_CONFIRM: dict[str, dict] = {}
 # Temporarily off — re-enable when thief / blacklist alerts are needed again.
 THIEF_DETECTION_ENABLED = False
+# A person is only reported UNKNOWN with a clear real face on a confident box.
+UNKNOWN_MIN_FACE_SCORE = 0.6
+UNKNOWN_MIN_PERSON_CONFIDENCE = 0.40
 
 
 _STATE_MAX_AGE_SEC = 120.0  # longest cooldown above is 30 s
@@ -1549,6 +1552,29 @@ def _process_person_box(
         _remember_identity(slot_key, verified, now)
         return verified
 
+    # UNKNOWN only for a clear YuNet face on a confident person box. Haar's
+    # fallback "faces" and weak YOLO persons were turning animals into
+    # unknown people (farm cameras): show them as plain PERSON instead.
+    if (
+        getattr(scanned, "engine", "") != "sface"
+        or float(getattr(scanned, "face_score", 0.0) or 0.0) < UNKNOWN_MIN_FACE_SCORE
+        or float(confidence or 0.0) < UNKNOWN_MIN_PERSON_CONFIDENCE
+    ):
+        _discard_snapshot(relative_path)
+        held = _held_identity(slot_key, now)
+        if held and held.get("status") == "verified":
+            return held
+        return {
+            "known": False,
+            "match_score": match_score,
+            "name": "Person",
+            "label": "PERSON",
+            "status": "pending",
+            "issue": "No clear face yet — not marked unknown",
+            "save_worthy": False,
+            "announce": "person detected",
+        }
+
     # Unknown face — soft blacklist match (disabled while thief detection is off).
     if THIEF_DETECTION_ENABLED:
         bl_person, bl_score, _ = recognize_blacklist(
@@ -1865,12 +1891,13 @@ def _draw_detection_boxes(frame, detections, person_labels: dict | None = None) 
 
 def _quick_detections(frame, camera) -> list:
     """Person boxes from the live watcher, without a second slow YOLO pass."""
-    from .detection import live_person_watcher, object_detector
+    from .detection import drop_weak_persons, live_person_watcher, object_detector, person_min_confidence
 
     camera_id = str(camera.id)
     source = getattr(camera, "rtsp_url", "") or ""
+    min_person = person_min_confidence(camera)
     if source:
-        live_person_watcher.touch(camera_id, source)
+        live_person_watcher.touch(camera_id, source, min_person)
     cached = live_person_watcher.latest(camera_id, max_age=0.9)
     if cached is not None:
         return cached
@@ -1878,7 +1905,7 @@ def _quick_detections(frame, camera) -> list:
     if live_person_watcher.running:
         stale = live_person_watcher.latest(camera_id, max_age=2.5)
         return stale or []
-    return object_detector.detect_fast(frame, input_size=320)
+    return drop_weak_persons(object_detector.detect_fast(frame, input_size=320), min_person)
 
 
 def _detect_and_record(frame, camera) -> tuple[int, list[str], dict]:

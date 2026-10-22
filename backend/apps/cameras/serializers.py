@@ -4,6 +4,7 @@ from rest_framework import serializers
 
 from apps.rules.models import Rule
 
+from .detection import PERSON_SENSITIVITY, person_sensitivity
 from .models import Camera, EdgeDevice, VisionCapture
 
 
@@ -13,6 +14,11 @@ class CameraSerializer(serializers.ModelSerializer):
     zone_name = serializers.CharField(source="zone.name", read_only=True, allow_null=True)
     zone_polygon = serializers.JSONField(source="zone.polygon_json", read_only=True, allow_null=True)
     zone_is_restricted = serializers.BooleanField(source="zone.is_restricted", read_only=True, allow_null=True)
+    # high = catch people on the first frame (indoor); strict = ignore weak
+    # "person" guesses (farms / animals). Stored in metadata, no migration.
+    person_sensitivity = serializers.ChoiceField(
+        choices=list(PERSON_SENSITIVITY), required=False, write_only=True
+    )
     # Rules switched on for this camera (apply-to-all rules are implied, not listed).
     rule_ids = serializers.PrimaryKeyRelatedField(
         source="rules", many=True, queryset=Rule.objects.all(), required=False
@@ -38,6 +44,7 @@ class CameraSerializer(serializers.ModelSerializer):
             "is_active",
             "auto_record",
             "rule_ids",
+            "person_sensitivity",
             "created_at",
             "updated_at",
         )
@@ -52,6 +59,25 @@ class CameraSerializer(serializers.ModelSerializer):
                 "Enter a valid camera URL (rtsp://, rtsps://, http:// or https://)."
             )
         return value.strip()
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["person_sensitivity"] = person_sensitivity(instance)
+        return data
+
+    def _merge_sensitivity(self, validated_data, instance=None):
+        sensitivity = validated_data.pop("person_sensitivity", None)
+        if sensitivity is not None:
+            metadata = dict(validated_data.get("metadata") or getattr(instance, "metadata", None) or {})
+            metadata["person_sensitivity"] = sensitivity
+            validated_data["metadata"] = metadata
+        return validated_data
+
+    def create(self, validated_data):
+        return super().create(self._merge_sensitivity(validated_data))
+
+    def update(self, instance, validated_data):
+        return super().update(instance, self._merge_sensitivity(validated_data, instance))
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
