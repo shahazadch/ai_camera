@@ -1291,6 +1291,65 @@ a.btn:visited {
 .person-alert-window label { display: grid; gap: 0.25rem; font-size: 0.85rem; }
 .rule-option span { display: grid; gap: 0.1rem; }
 .rule-option small { font-size: 0.76rem; }
+.recording-settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem 1.2rem;
+  align-items: flex-end;
+  margin: 0 0 1.2rem;
+  padding: 1rem;
+  border-radius: var(--radius);
+  background: var(--surface-solid);
+}
+.recording-settings label { display: grid; gap: 0.3rem; font-size: 0.85rem; }
+.recording-settings .inline-input { display: flex; gap: 0.4rem; align-items: center; }
+.recording-settings input[type="number"] { width: 5rem; }
+.recording-filter { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end; margin-bottom: 0.8rem; }
+.recording-filter label { display: grid; gap: 0.3rem; font-size: 0.85rem; }
+.recording-player { margin-bottom: 1rem; padding: 0.8rem; border-radius: var(--radius); background: #000; }
+.recording-player-head { display: flex; justify-content: space-between; align-items: center; color: #fff; margin-bottom: 0.5rem; }
+.recording-player video { width: 100%; max-height: 60vh; display: block; }
+.recording-cameras {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.9rem;
+}
+.recording-camera-card {
+  display: grid;
+  gap: 0.45rem;
+  justify-items: start;
+  text-align: left;
+  padding: 1rem;
+  border-radius: var(--radius);
+  border: 1px solid rgba(78, 127, 189, 0.22);
+  background: var(--surface-solid);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.recording-camera-card:hover { border-color: var(--primary-2); }
+.recording-camera-icon svg { width: 26px; height: 26px; }
+.recording-camera-error { font-size: 0.72rem; word-break: break-word; }
+.back-link {
+  border: 0;
+  background: none;
+  color: var(--primary-2);
+  font: inherit;
+  font-size: 0.8em;
+  cursor: pointer;
+  padding: 0 0.3rem 0 0;
+}
+.row-active td { background: rgba(31, 95, 191, 0.08); }
+.btn.danger { background: var(--critical); border-color: var(--critical); }
+.btn.danger:disabled { opacity: 0.45; }
+.recording-bulk { display: flex; gap: 1rem; align-items: center; margin-bottom: 0.6rem; }
+.check-col { width: 2.2rem; text-align: center; }
+.live-rewind-buttons { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.live-rewind-note { display: block; color: #bbb; margin-top: 0.4rem; }
+.live-dot { color: #ff4d4f; }
+.live-rewind-off { margin-bottom: 1rem; }
+.load-more { display: flex; justify-content: center; padding: 1rem; }
+.recording-usage { flex-basis: 100%; font-size: 0.8rem; }
 .tunes-panel { margin-top: 1.6rem; }
 .tunes-panel h2 { margin-bottom: 0.2rem; }
 .tune-upload { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin: 0.8rem 0; }

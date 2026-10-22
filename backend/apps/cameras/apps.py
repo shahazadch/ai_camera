@@ -49,13 +49,15 @@ class CamerasConfig(AppConfig):
             return
         from django.conf import settings
 
-        if settings.CONTINUOUS_RECORDING:
-            try:
-                from apps.cameras.continuous_recorder import recorder_manager
+        try:
+            from apps.cameras.continuous_recorder import recorder_manager, start_retention_loop
 
+            # Retention runs even with recording off so old clips still expire.
+            start_retention_loop()
+            if settings.CONTINUOUS_RECORDING:
                 recorder_manager.ensure_started()
-            except Exception:
-                pass
+        except Exception:
+            pass
         try:
             from apps.cameras.detection import boot_person_watcher
 

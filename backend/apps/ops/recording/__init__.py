@@ -109,12 +109,8 @@ class RTSPRecordingAdapter(RecordingAdapter):
             cap.release()
             return ClipResult(clip_key=key, evidence_url=f"/media/{key}", details={"frames": frames})
         except Exception as exc:
-            logger.warning("RTSP clip capture unavailable (%s); returning placeholder", exc)
-            return ClipResult(
-                clip_key=key,
-                evidence_url=f"/media/{key}",
-                details={"placeholder": True, "error": str(exc)},
-            )
+            # Fail the job instead of marking a clip READY that was never written.
+            raise RuntimeError(f"RTSP clip capture failed: {exc}") from exc
 
 
 class VendorStubAdapter(RecordingAdapter):

@@ -3,6 +3,7 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import connection
 from django.utils import timezone
 
@@ -17,6 +18,7 @@ from .models import (
     NotificationJob,
     PasswordPolicy,
     RecordingJob,
+    RecordingStatus,
     SessionPolicy,
     SIEMForwardJob,
     SnapshotObject,
@@ -65,6 +67,166 @@ class RecordingJobListView(TenantQuerysetMixin, generics.ListAPIView):
         return RecordingJob.objects.filter(organization_id__in=self.get_user_organizations()).select_related(
             "camera"
         )
+
+
+class RecordingCameraSummaryView(APIView):
+    """One row per camera for the Recordings page: clip count, newest clip, recording now."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        from django.db.models import Count, Max, Q
+
+        from apps.cameras.continuous_recorder import live_playlist_url, recorder_manager
+
+        org_ids = list(request.user.memberships.values_list("organization_id", flat=True))
+        ready = Q(recording_jobs__status=RecordingStatus.READY)
+        cameras = (
+            Camera.objects.filter(site__organization_id__in=org_ids)
+            .annotate(
+                clip_count=Count("recording_jobs", filter=ready),
+                last_clip_at=Max("recording_jobs__started_at", filter=ready),
+            )
+            .order_by("name")
+        )
+        live = {w["camera_id"]: w for w in recorder_manager.status()["workers"]}
+        return Response(
+            [
+                {
+                    "camera_id": str(camera.id),
+                    "camera_name": camera.name,
+                    "status": camera.status,
+                    "auto_record": camera.auto_record,
+                    "recording_now": bool(live.get(str(camera.id), {}).get("recording")),
+                    "live_url": live_playlist_url(camera.id)
+                    if live.get(str(camera.id), {}).get("recording")
+                    else None,
+                    "last_error": live.get(str(camera.id), {}).get("last_error", "")
+                    or (camera.metadata or {}).get("last_recording_error", ""),
+                    "clip_count": camera.clip_count,
+                    "last_clip_at": camera.last_clip_at,
+                }
+                for camera in cameras
+            ]
+        )
+
+
+class RecordingBulkDeleteView(APIView):
+    """Delete chosen recordings (rows + video files). Owners/admins only."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        from pathlib import Path
+
+        from apps.cameras.continuous_recorder import delete_clip
+        from apps.tenancy.models import UserMembership
+
+        ids = request.data.get("ids")
+        if not isinstance(ids, list) or not ids:
+            return Response({"ids": "Send a list of recording ids."}, status=status.HTTP_400_BAD_REQUEST)
+        manage_orgs = list(
+            UserMembership.objects.filter(user=request.user, role__in=[Role.OWNER, Role.ADMIN]).values_list(
+                "organization_id", flat=True
+            )
+        )
+        if not manage_orgs:
+            return Response(
+                {"detail": "Only owners and admins can delete recordings."}, status=status.HTTP_403_FORBIDDEN
+            )
+        try:
+            jobs = RecordingJob.objects.filter(id__in=ids, organization_id__in=manage_orgs)
+            media = Path(settings.MEDIA_ROOT)
+            deleted = 0
+            for job in jobs:
+                delete_clip(media, job.clip_key)
+                job.delete()
+                deleted += 1
+        except (ValueError, DjangoValidationError):
+            return Response({"ids": "Invalid recording id."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"deleted": deleted})
+
+
+class RecordingSettingsView(APIView):
+    """How long recordings are kept and which camera stream is recorded."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _organization(self, request):
+        from apps.tenancy.models import Organization, UserMembership
+
+        memberships = UserMembership.objects.filter(user=request.user).select_related("organization")
+        wanted = request.query_params.get("organization") or request.data.get("organization")
+        if wanted:
+            memberships = memberships.filter(organization_id=wanted)
+        membership = memberships.order_by("created_at").first()
+        return membership.organization if membership else None
+
+    def _payload(self, organization):
+        from apps.cameras.continuous_recorder import recorder_manager, recording_settings, recordings_disk_usage
+
+        return {
+            "organization": str(organization.id),
+            **recording_settings(organization),
+            "enabled": bool(settings.CONTINUOUS_RECORDING),
+            "disk_usage_bytes": recordings_disk_usage(),
+            "cameras_recording": recorder_manager.status()["count"],
+        }
+
+    def get(self, request):
+        organization = self._organization(request)
+        if organization is None:
+            return Response({"detail": "No organization."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(self._payload(organization))
+
+    def patch(self, request):
+        import threading
+
+        from apps.cameras.continuous_recorder import purge_recordings, recorder_manager
+
+        organization = self._organization(request)
+        if organization is None:
+            return Response({"detail": "No organization."}, status=status.HTTP_404_NOT_FOUND)
+        require_role(request.user, organization, [Role.OWNER, Role.ADMIN])
+        current = dict(organization.settings or {})
+        for field, key in (
+            ("retention_days", "recording_retention_days"),
+            ("event_retention_days", "recording_event_retention_days"),
+        ):
+            if field not in request.data:
+                continue
+            try:
+                days = int(request.data[field])
+            except (TypeError, ValueError):
+                days = 0
+            if not 1 <= days <= 365:
+                return Response({field: "Choose 1 to 365 days."}, status=status.HTTP_400_BAD_REQUEST)
+            current[key] = days
+        restart = False
+        if "live_rewind_minutes" in request.data:
+            try:
+                minutes = int(request.data["live_rewind_minutes"])
+            except (TypeError, ValueError):
+                minutes = 0
+            if not 10 <= minutes <= 360:
+                return Response(
+                    {"live_rewind_minutes": "Choose 10 to 360 minutes."}, status=status.HTTP_400_BAD_REQUEST
+                )
+            restart = minutes != current.get("recording_live_rewind_minutes", 120)
+            current["recording_live_rewind_minutes"] = minutes
+        if "quality" in request.data:
+            quality = request.data["quality"]
+            if quality not in {"standard", "high"}:
+                return Response({"quality": "Use standard or high."}, status=status.HTTP_400_BAD_REQUEST)
+            restart = restart or quality != current.get("recording_quality", "standard")
+            current["recording_quality"] = quality
+        organization.settings = current
+        organization.save(update_fields=["settings", "updated_at"])
+        # Apply now: shorter retention deletes at once; new quality/rewind restarts recorders.
+        threading.Thread(target=purge_recordings, daemon=True).start()
+        if restart:
+            threading.Thread(target=recorder_manager.sync_from_db, daemon=True).start()
+        return Response(self._payload(organization))
 
 
 class SnapshotListView(TenantQuerysetMixin, generics.ListAPIView):

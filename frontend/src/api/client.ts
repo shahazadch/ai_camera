@@ -89,6 +89,29 @@ export interface RuleHit {
   at: string;
 }
 
+export interface RecordingCameraSummary {
+  camera_id: string;
+  camera_name: string;
+  status: string;
+  auto_record: boolean;
+  recording_now: boolean;
+  live_url: string | null;
+  last_error: string;
+  clip_count: number;
+  last_clip_at: string | null;
+}
+
+export interface RecordingSettings {
+  organization: string;
+  retention_days: number;
+  event_retention_days: number;
+  live_rewind_minutes: number;
+  quality: "standard" | "high";
+  enabled: boolean;
+  disk_usage_bytes: number;
+  cameras_recording: number;
+}
+
 export interface AlertSound {
   id: string;
   organization: string;
@@ -927,8 +950,36 @@ class ApiClient {
     return this.request<Paginated<NotificationDeliveryLog>>("/notifications/logs/");
   }
 
-  getRecordings() {
-    return this.request<Paginated<RecordingJob>>("/recordings/");
+  getRecordingCameras() {
+    return this.request<RecordingCameraSummary[]>("/recordings/cameras/");
+  }
+
+  getRecordingSettings() {
+    return this.request<RecordingSettings>("/recordings/settings/");
+  }
+
+  deleteRecordings(ids: string[]) {
+    return this.request<{ deleted: number }>("/recordings/delete/", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    });
+  }
+
+  updateRecordingSettings(
+    payload: Partial<
+      Pick<RecordingSettings, "retention_days" | "event_retention_days" | "live_rewind_minutes" | "quality">
+    >
+  ) {
+    return this.request<RecordingSettings>("/recordings/settings/", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  getRecordings(cameraId = "", page = 1) {
+    const params = new URLSearchParams({ page: String(page) });
+    if (cameraId) params.set("camera", cameraId);
+    return this.request<Paginated<RecordingJob>>(`/recordings/?${params.toString()}`);
   }
 
   getSnapshots() {

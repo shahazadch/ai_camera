@@ -77,9 +77,19 @@ docker compose --profile edge up -d      # simulated edge service
 ```
 
 Tuning env vars: `CAMERA_MONITOR_INTERVAL` (seconds, default 10, `0` = off),
-`CONTINUOUS_RECORDING` (default `False`), `OPENCV_THREADS` (default 2), `LIVE_DETECT_FPS` (person-detection passes per second, default 4).
+`CONTINUOUS_RECORDING` (default `True`; each camera's *Auto record* switch still applies), `OPENCV_THREADS` (default 2), `LIVE_DETECT_FPS` (person-detection passes per second, default 4).
 
 Inside containers `localhost` is the container itself. Use `host.docker.internal` for a stream on your Mac.
+
+## Recording
+
+Cameras with **Auto record** on (Cameras → Edit) are recorded continuously as 1-minute MP4
+clips, listed under **Recordings**. ffmpeg copies the camera's own stream, so it needs almost
+no CPU. On the Recordings page you can set:
+
+- **Keep recordings for N days** (default 3). Older clips are deleted automatically every 30 minutes.
+- **Quality**: *Standard* records the camera's sub-stream (~5 GB/day per camera); *High*
+  records full resolution (~20 GB/day per camera).
 
 ## Camera rules (sounds, photos, alerts)
 

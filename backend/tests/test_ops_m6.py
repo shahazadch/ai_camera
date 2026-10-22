@@ -144,13 +144,13 @@ def test_recording_adapter_processes_job(ops_env):
     job = RecordingJob.objects.filter(event=result.event).first()
     assert job is not None
     job.refresh_from_db()
-    # Eager celery should have processed
-    assert job.status in {RecordingStatus.READY, RecordingStatus.FAILED, RecordingStatus.RECORDING}
-    if job.status != RecordingStatus.READY:
+    # Eager celery processed it. The test camera has no real stream, so the clip
+    # must fail honestly instead of being marked READY with no file behind it.
+    if job.status == RecordingStatus.REQUESTED:
         process_recording_job(str(job.id))
         job.refresh_from_db()
-    assert job.status == RecordingStatus.READY
-    assert job.clip_key
+    assert job.status == RecordingStatus.FAILED
+    assert "RTSP clip capture failed" in job.details.get("error", "")
 
 
 @pytest.mark.django_db

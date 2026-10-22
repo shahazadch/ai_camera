@@ -343,7 +343,7 @@ class CameraRecorderStatusView(APIView):
         )
         status = recorder_manager.status()
         status["workers"] = [w for w in status.get("workers", []) if w.get("camera_id") in allowed]
-        status["count"] = len(status["workers"])
+        status["count"] = sum(1 for w in status["workers"] if w.get("recording"))
         return Response(status)
 
 

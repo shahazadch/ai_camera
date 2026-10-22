@@ -212,7 +212,8 @@ CAMERA_MONITOR_INTERVAL = float(os.getenv("CAMERA_MONITOR_INTERVAL", "10"))
 ALERT_TIME_ZONE = os.getenv("ALERT_TIME_ZONE", "Asia/Karachi")
 # Shared secret for scripts/alert_player.py, which plays sounds on the host.
 ALERT_PLAYER_KEY = os.getenv("ALERT_PLAYER_KEY", "alert-dev-key-change-me")
-CONTINUOUS_RECORDING = os.getenv("CONTINUOUS_RECORDING", "False").lower() in ("1", "true", "yes")
+# Per-camera continuous recording (camera.auto_record) via ffmpeg stream copy — cheap on CPU.
+CONTINUOUS_RECORDING = os.getenv("CONTINUOUS_RECORDING", "True").lower() in ("1", "true", "yes")
 
 # --- M6 Evidence storage (local | s3 | minio) ---
 EVIDENCE_STORAGE_BACKEND = os.getenv("EVIDENCE_STORAGE_BACKEND", "local").lower()

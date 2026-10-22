@@ -59,7 +59,7 @@ services:
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       AWS_STORAGE_BUCKET_NAME: sentinelvision-evidence
       CAMERA_MONITOR_INTERVAL: ${CAMERA_MONITOR_INTERVAL:-10}
-      CONTINUOUS_RECORDING: ${CONTINUOUS_RECORDING:-False}
+      CONTINUOUS_RECORDING: ${CONTINUOUS_RECORDING:-True}
       OPENCV_THREADS: ${OPENCV_THREADS:-2}
       VISION_LLM_BASE_URL: ${VISION_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
       LIVE_DETECT_FPS: ${LIVE_DETECT_FPS:-4}
@@ -141,6 +141,8 @@ services:
     build: ./frontend
     ports:
       - "3000:80"
+    volumes:
+      - media_data:/usr/share/nginx/media:ro
     depends_on:
       backend:
         condition: service_healthy
