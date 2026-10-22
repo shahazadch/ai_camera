@@ -4,6 +4,7 @@ import Layout from "./components/Layout";
 import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
 import CamerasPage from "./pages/CamerasPage";
+import RulesPage from "./pages/RulesPage";
 import EventsPage from "./pages/EventsPage";
 import AlertsPage from "./pages/AlertsPage";
 import PersonsPage from "./pages/PersonsPage";
@@ -43,6 +44,7 @@ export default function App() {
       >
         <Route index element={<DashboardPage />} />
         <Route path="cameras" element={<CamerasPage />} />
+        <Route path="rules" element={<RulesPage />} />
         <Route path="vision" element={<VisionPage />} />
         <Route path="events" element={<EventsPage />} />
         <Route path="alerts" element={<AlertsPage />} />

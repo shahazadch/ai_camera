@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
-import { unlockStairsAlert } from "../stairsAlert";
 import BackgroundCameraMonitor from "./BackgroundCameraMonitor";
-import PersonAlertListener from "./PersonAlertListener";
+import RuleHitsListener from "./RuleHitsListener";
 import Icon from "./Icon";
 
 type NavItem = { to: string; label: string; icon: string; end?: boolean };
@@ -16,6 +15,7 @@ const navGroups: { title: string; items: NavItem[] }[] = [
     items: [
       { to: "/", label: "Overview", icon: "overview", end: true },
       { to: "/cameras", label: "Cameras", icon: "camera" },
+      { to: "/rules", label: "Camera Rules", icon: "bell" },
       { to: "/recordings", label: "Recordings", icon: "recording" },
       { to: "/vision", label: "AI Vision", icon: "vision" },
       { to: "/alerts", label: "Alerts", icon: "alert" },
@@ -86,16 +86,6 @@ export default function Layout() {
   useEffect(() => {
     setMobileOpen(false);
   }, [location.pathname]);
-
-  useEffect(() => {
-    const unlock = () => unlockStairsAlert();
-    window.addEventListener("pointerdown", unlock);
-    window.addEventListener("keydown", unlock);
-    return () => {
-      window.removeEventListener("pointerdown", unlock);
-      window.removeEventListener("keydown", unlock);
-    };
-  }, []);
 
   useEffect(() => {
     document.body.classList.toggle("menu-open", mobileOpen);
@@ -184,7 +174,7 @@ export default function Layout() {
                   <span className="live-dot" /> Live
                 </span>
                 <BackgroundCameraMonitor />
-                <PersonAlertListener />
+                <RuleHitsListener />
               </div>
             </div>
           </div>

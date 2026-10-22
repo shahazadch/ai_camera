@@ -1289,6 +1289,15 @@ a.btn:visited {
   margin: 0.5rem 0 0 1.6rem;
 }
 .person-alert-window label { display: grid; gap: 0.25rem; font-size: 0.85rem; }
+.rule-option span { display: grid; gap: 0.1rem; }
+.rule-option small { font-size: 0.76rem; }
+.tunes-panel { margin-top: 1.6rem; }
+.tunes-panel h2 { margin-bottom: 0.2rem; }
+.tune-upload { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin: 0.8rem 0; }
+.tune-list { list-style: none; padding: 0; display: grid; gap: 0.5rem; }
+.tune-list li { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: center; }
+.tune-list audio { height: 32px; }
+.day-chips { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; align-items: center; margin-top: 0.6rem; }
 .person-alert-window p { flex-basis: 100%; margin: 0; font-size: 0.78rem; }
 .person-alert-toasts {
   position: fixed;

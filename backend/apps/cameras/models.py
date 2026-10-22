@@ -1,11 +1,6 @@
 import hashlib
 import secrets
-from datetime import datetime
-from zoneinfo import ZoneInfo
-
-from django.conf import settings
 from django.db import models
-from django.utils import timezone
 
 from apps.common.models import TimestampedModel, UUIDModel
 from apps.sites.models import Site, Zone
@@ -43,11 +38,6 @@ class Camera(UUIDModel, TimestampedModel):
     is_active = models.BooleanField(default=True)
     # Home / NVR cameras: keep writing rolling video clips automatically.
     auto_record = models.BooleanField(default=True)
-    # Play a sound when any person appears, optionally only between these times
-    # (ALERT_TIME_ZONE). Both empty = all day; start > end wraps past midnight.
-    person_alert_enabled = models.BooleanField(default=False)
-    person_alert_start = models.TimeField(null=True, blank=True)
-    person_alert_end = models.TimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["name"]
@@ -55,17 +45,6 @@ class Camera(UUIDModel, TimestampedModel):
 
     def __str__(self):
         return f"{self.name} @ {self.site.name}"
-
-    def person_alert_active(self, now: datetime | None = None) -> bool:
-        if not self.person_alert_enabled:
-            return False
-        start, end = self.person_alert_start, self.person_alert_end
-        if start is None or end is None:
-            return True
-        local = (now or timezone.now()).astimezone(ZoneInfo(settings.ALERT_TIME_ZONE)).time()
-        if start <= end:
-            return start <= local < end
-        return local >= start or local < end
 
     @property
     def organization(self):

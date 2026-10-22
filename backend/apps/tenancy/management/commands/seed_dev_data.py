@@ -15,6 +15,7 @@ from apps.identity.models import (
     VisitorRegistration,
     VisitorStatus,
 )
+from apps.rules.defaults import ensure_default_rules
 from apps.safety.models import SafetyProfile
 from apps.sites.models import Site, Zone
 from apps.tenancy.models import Organization, Role, UserMembership
@@ -146,6 +147,7 @@ class Command(BaseCommand):
             admin_user.set_password("admin123")
             admin_user.save()
         UserMembership.objects.get_or_create(user=admin_user, organization=org, defaults={"role": Role.OWNER})
+        ensure_default_rules(org)
         operator, op_created = User.objects.get_or_create(
             username="operator",
             defaults={"email": "operator@acme-security.com"},

@@ -218,23 +218,24 @@ class CameraFrameView(APIView):
                             v_labels.append(str(info))
                             v_ok += 1
                         continue
-                    status = info.get("status") or "unknown"
+                    # Not "status": that would shadow rest_framework.status used below.
+                    label_status = info.get("status") or "unknown"
                     text = str(info.get("name") or info.get("label") or "").strip()
                     if text:
                         v_labels.append(text)
-                    if status == "verified":
+                    if label_status == "verified":
                         v_ok += 1
                         if not v_announce and info.get("name"):
                             v_announce = str(info["name"])
-                    elif status == "blacklist":
+                    elif label_status == "blacklist":
                         v_threat += 1
                         if not v_announce:
                             v_announce = str(info.get("announce") or text or "threat")
-                    elif status == "unknown":
+                    elif label_status == "unknown":
                         v_unknown += 1
                         if not v_announce:
                             v_announce = "UNKNOWN person detected"
-                    elif status == "pending" and info.get("issue") and not v_issue:
+                    elif label_status == "pending" and info.get("issue") and not v_issue:
                         v_issue = str(info["issue"])
                 for name in v_labels:
                     if name and name not in labels:
@@ -344,57 +345,6 @@ class CameraRecorderStatusView(APIView):
         status["workers"] = [w for w in status.get("workers", []) if w.get("camera_id") in allowed]
         status["count"] = len(status["workers"])
         return Response(status)
-
-
-class CameraPersonAlertsView(APIView):
-    """
-    Arrival counters for cameras with the person-alert sound on.
-
-    Polled by the browser (logged-in user, own org) and by scripts/alert_player.py
-    on the host (X-Alert-Key, all cameras) so a sound plays with no page open.
-    The client plays when ``seq`` grows while ``active`` is true.
-    """
-
-    permission_classes = [permissions.AllowAny]
-
-    def get(self, request):
-        import hmac
-
-        from django.conf import settings
-
-        from .detection import live_detection_tracker
-
-        cameras = Camera.objects.filter(is_active=True, person_alert_enabled=True)
-        alert_key = request.headers.get("X-Alert-Key", "")
-        if alert_key:
-            if not hmac.compare_digest(alert_key, settings.ALERT_PLAYER_KEY):
-                return Response({"detail": "Invalid alert key."}, status=status.HTTP_403_FORBIDDEN)
-        elif request.user and request.user.is_authenticated and not isinstance(
-            request.user, EdgeServiceUser
-        ):
-            org_ids = request.user.memberships.values_list("organization_id", flat=True)
-            cameras = cameras.filter(site__organization_id__in=list(org_ids))
-        else:
-            return Response(
-                {"detail": "Authentication credentials were not provided."},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        now = timezone.now()
-        return Response(
-            {
-                "time_zone": settings.ALERT_TIME_ZONE,
-                "cameras": [
-                    {
-                        "camera_id": str(camera.id),
-                        "name": camera.name,
-                        "seq": live_detection_tracker.arrival_seq(str(camera.id)),
-                        "active": camera.person_alert_active(now),
-                    }
-                    for camera in cameras
-                ],
-            }
-        )
 
 
 class CameraVisionAnalyzeView(APIView):
@@ -968,6 +918,7 @@ def _remember_identity(slot_key: str, result: dict, now: float) -> None:
             "known": result.get("known", True),
             "match_score": result.get("match_score", 0.0),
             "person_id": result.get("person_id"),
+            "person_type": result.get("person_type"),
             "name": result.get("name"),
             "label": result.get("label"),
             "status": result.get("status"),
@@ -1560,6 +1511,7 @@ def _process_person_box(
 
         verified = {
             "person_id": str(person.id),
+            "person_type": person.person_type,
             "name": person.full_name,
             "label": label,
             "status": status,
@@ -1964,9 +1916,20 @@ def _detect_and_record(frame, camera) -> tuple[int, list[str], dict]:
         person_labels: dict = {}
         person_dets = [d for d in detections if d.class_name == "person"]
         verify["objects"] = []
-        # Mobile tracking only when this camera's AI module is enabled.
+        from apps.rules import engine as rule_engine
+        from apps.rules.models import FACE_CHECKS
+
+        # Each check runs only when the camera's module is ticked or one of its
+        # rules needs it; skipping the face pass is the big CPU saving.
+        camera_id = str(camera.id)
         modules = set(camera.enabled_modules or [])
-        track_mobile = "mobile_use_tracking" in modules
+        track_mobile = "mobile_use_tracking" in modules or rule_engine.camera_needs(
+            camera_id, {"mobile_use"}
+        )
+        run_face = bool(modules & {"face_recognition", "unknown_person"}) or rule_engine.camera_needs(
+            camera_id, FACE_CHECKS
+        )
+        run_dangers = "weapon_detection" in modules
         phone_findings = find_phones_in_use(detections) if track_mobile else []
         phone_dets = []
         if phone_findings:
@@ -1995,7 +1958,7 @@ def _detect_and_record(frame, camera) -> tuple[int, list[str], dict]:
         # Skip empty updates — the watcher owns "nobody here" so a slow face
         # request cannot erase a box that just appeared.
         if person_dets or phone_dets:
-            from .detection import live_detection_tracker
+            from .detection import dispatch_rule_events, live_detection_tracker
 
             live_detection_tracker.update(
                 str(camera.id),
@@ -2003,9 +1966,10 @@ def _detect_and_record(frame, camera) -> tuple[int, list[str], dict]:
                 None,
                 frame_h=int(frame.shape[0]),
             )
+            dispatch_rule_events(camera_id, frame)
 
-        # Auto-detect any illegal / security-critical signal we can see.
-        illegal_findings = find_illegal_activity(frame, detections)
+        # Weapons in hand / unattended bags (Weapon module).
+        illegal_findings = find_illegal_activity(frame, detections) if run_dangers else []
         # Draw fire/smoke synthetic boxes too.
         for finding in illegal_findings:
             if finding.get("kind") in {"fire", "smoke"}:
@@ -2079,6 +2043,13 @@ def _detect_and_record(frame, camera) -> tuple[int, list[str], dict]:
                         now_phone - _LAST_MOBILE_USE.get(slot_key, 0.0) <= _MOBILE_USE_HOLD_SEC
                     ):
                         on_phone = True
+                    if not run_face:
+                        if on_phone:
+                            rule_engine.trigger(
+                                camera_id, "mobile_use", frame=frame, box=box[:4],
+                                confidence=det.confidence,
+                            )
+                        continue
                     result = _process_person_box(
                         frame,
                         box,
@@ -2106,6 +2077,22 @@ def _detect_and_record(frame, camera) -> tuple[int, list[str], dict]:
                             result["activity"] = "using mobile"
                             if result.get("name"):
                                 result["label"] = f"{result['name']} · MOBILE"
+                    rule_status = result.get("status")
+                    if rule_status == "unknown":
+                        rule_engine.trigger(
+                            camera_id, "unknown_person", frame=frame, box=box[:4],
+                            result=result, confidence=det.confidence,
+                        )
+                    elif rule_status == "verified":
+                        rule_engine.trigger(
+                            camera_id, "saved_person", frame=frame, box=box[:4],
+                            result=result, confidence=det.confidence,
+                        )
+                    if track_mobile and (result.get("using_phone") or on_phone):
+                        rule_engine.trigger(
+                            camera_id, "mobile_use", frame=frame, box=box[:4],
+                            result=result, confidence=det.confidence,
+                        )
                     person_labels[(det.x, det.y, det.width, det.height)] = result
                     status = result.get("status", "unknown")
                     if status in verify:

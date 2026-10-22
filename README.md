@@ -81,25 +81,54 @@ Tuning env vars: `CAMERA_MONITOR_INTERVAL` (seconds, default 10, `0` = off),
 
 Inside containers `localhost` is the container itself. Use `host.docker.internal` for a stream on your Mac.
 
-## Person alert sound
+## Camera rules (sounds, photos, alerts)
 
-Each camera can play a sound when **any person** walks into view, optionally only between
-two times (Pakistan time, `ALERT_TIME_ZONE`). Turn it on in **Cameras → Edit → Play sound
-when a person appears**, then set From/To. Leave both times empty for all day; `22:00 → 06:00` covers
-the night.
+Open **Camera Rules** in the sidebar. A rule says *what to detect*, *when* and *what to do*:
 
-Docker can't use your speakers, so a small player runs on the laptop itself (Python 3, no installs).
-It works with no browser open:
+| Detect | When it fires |
+|---|---|
+| Any person | someone new walks into view |
+| Unknown person | a clear face matches nobody saved |
+| Saved person | a saved person (optionally a group or specific people) is recognized |
+| Person using mobile | a person is holding / using a phone |
+| Coming up the stairs | someone new appears at the bottom of the picture |
+
+Each rule has a time window (Pakistan time, `ALERT_TIME_ZONE`; `22:00 → 06:00` covers the
+night), optional weekdays, actions and a "don't repeat for N seconds" cooldown. Actions:
+laptop sound (built-in chime, bell, doorbell, beep, horn, alarm, siren, or **your own tune**
+uploaded under *Your tunes* on the Camera Rules page), a **spoken announcement** (e.g.
+"{name} at {camera}"), save photo, alert info/warning/critical, and a dashboard pop-up.
+
+Create a rule once, then switch it on per camera in **Cameras → Edit → Rules on this camera**,
+or tick *Apply to all cameras*. Starter rules (Night intruder, Unknown visitor, Staff
+arrived, Stairs) are created for you but aren't attached to any camera yet.
+
+Face recognition only runs on a camera when its *Face recognition* module is ticked or one of
+its rules needs faces, so cameras that only need "Any person" use much less CPU.
+
+**Sound on the laptop.** Docker can't use your speakers, so a small player runs on the laptop
+itself (Python 3, no installs) and works with no browser open:
 
 ```bash
-python3 scripts/alert_player.py --test          # hear the chime once
+python3 scripts/alert_player.py --test doorbell # hear a built-in tune
+python3 scripts/alert_player.py --say "Hello"   # check the voice
 python3 scripts/alert_player.py                 # run (Ctrl+C to stop)
 ./scripts/install_alert_player_mac.sh           # macOS: start automatically at login
 ./scripts/install_alert_player_mac.sh --uninstall
 ```
 
-If you set `ALERT_PLAYER_KEY` in `.env`, pass the same value with `--key` (or the
-`ALERT_PLAYER_KEY` env var). An open dashboard also shows a silent "Person on …" pop-up.
+**Windows:** install Python 3 from python.org (tick *Add Python to PATH*), then in PowerShell:
+
+```powershell
+python scripts\alert_player.py --test siren
+python scripts\alert_player.py
+# start automatically at login (no window); add -Uninstall to remove
+powershell -ExecutionPolicy Bypass -File scripts\install_alert_player_windows.ps1
+```
+
+Uploaded wav, mp3, m4a and aiff tunes play on Windows; ogg plays on Mac/Linux only.
+
+If you set `ALERT_PLAYER_KEY` in `.env`, pass the same value with `--key`.
 
 ## Lite mode (no Docker, ~0.5 GB)
 

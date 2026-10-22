@@ -6,7 +6,6 @@ from .views import (
     CameraFrameView,
     CameraListCreateView,
     CameraMonitorTickView,
-    CameraPersonAlertsView,
     CameraRecorderStatusView,
     CameraVisionAnalyzeView,
     EdgeCameraListView,
@@ -19,7 +18,6 @@ from .views import (
 urlpatterns = [
     path("cameras/", CameraListCreateView.as_view(), name="camera-list"),
     path("cameras/monitor/tick/", CameraMonitorTickView.as_view(), name="camera-monitor-tick"),
-    path("cameras/person-alerts/", CameraPersonAlertsView.as_view(), name="camera-person-alerts"),
     path("cameras/recorder/status/", CameraRecorderStatusView.as_view(), name="camera-recorder-status"),
     path("cameras/<uuid:pk>/", CameraDetailView.as_view(), name="camera-detail"),
     path("cameras/<uuid:pk>/test/", CameraConnectionTestView.as_view(), name="camera-test"),

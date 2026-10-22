@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     "apps.analytics",
     "apps.safety",
     "apps.ops",
+    "apps.rules",
 ]
 
 MIDDLEWARE = [

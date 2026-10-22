@@ -40,13 +40,62 @@ export interface Camera {
   last_seen_at: string | null;
   is_active: boolean;
   auto_record: boolean;
-  person_alert_enabled: boolean;
-  person_alert_start: string | null;
-  person_alert_end: string | null;
+  rule_ids: string[];
   metadata: Record<string, unknown>;
   zone_name?: string | null;
   zone_polygon?: number[][] | null;
   zone_is_restricted?: boolean | null;
+}
+
+export type RuleDetect = "any_person" | "unknown_person" | "saved_person" | "mobile_use" | "stairs";
+// "" = silent, a built-in tune name, or "custom:<AlertSound id>".
+export type RuleSound = string;
+export type RuleSeverity = "" | "info" | "warning" | "critical";
+
+export interface CameraRule {
+  id: string;
+  organization: string;
+  name: string;
+  detect: RuleDetect;
+  params: { person_types?: string[]; person_ids?: string[] };
+  start_time: string | null;
+  end_time: string | null;
+  days: number[];
+  sound: RuleSound;
+  speak: boolean;
+  speak_text: string;
+  save_photo: boolean;
+  alert_severity: RuleSeverity;
+  popup: boolean;
+  cooldown_sec: number;
+  apply_to_all: boolean;
+  enabled: boolean;
+  camera_ids: string[];
+  camera_names: string[];
+  last_triggered_at: string | null;
+}
+
+export interface RuleHit {
+  id: number;
+  rule_id: string;
+  rule_name: string;
+  camera_id: string;
+  camera_name: string;
+  sound: RuleSound;
+  speech: string;
+  popup: boolean;
+  message: string;
+  event_id: string | null;
+  at: string;
+}
+
+export interface AlertSound {
+  id: string;
+  organization: string;
+  name: string;
+  sound_key: string;
+  size_bytes: number | null;
+  created_at: string;
 }
 
 export interface DetectionEvent {
@@ -472,11 +521,57 @@ class ApiClient {
     return this.request<Paginated<Camera>>("/cameras/");
   }
 
-  getPersonAlerts() {
-    return this.request<{
-      time_zone: string;
-      cameras: Array<{ camera_id: string; name: string; seq: number; active: boolean }>;
-    }>("/cameras/person-alerts/");
+  getCameraRules() {
+    return this.request<CameraRule[]>("/camera-rules/");
+  }
+
+  createCameraRule(payload: Partial<CameraRule>) {
+    return this.request<CameraRule>("/camera-rules/", { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  updateCameraRule(id: string, payload: Partial<CameraRule>) {
+    return this.request<CameraRule>(`/camera-rules/${id}/`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  deleteCameraRule(id: string) {
+    return this.request<void>(`/camera-rules/${id}/`, { method: "DELETE" });
+  }
+
+  testCameraRule(id: string) {
+    return this.request<RuleHit>(`/camera-rules/${id}/test/`, { method: "POST" });
+  }
+
+  getAlertSounds() {
+    return this.request<AlertSound[]>("/camera-rules/sounds/");
+  }
+
+  uploadAlertSound(organization: string, name: string, file: File) {
+    const form = new FormData();
+    form.append("organization", organization);
+    form.append("name", name);
+    form.append("file", file);
+    return this.request<AlertSound>("/camera-rules/sounds/", { method: "POST", body: form });
+  }
+
+  deleteAlertSound(id: string) {
+    return this.request<void>(`/camera-rules/sounds/${id}/`, { method: "DELETE" });
+  }
+
+  /** Uploaded tune as a blob URL for the preview player (caller revokes it). */
+  async getAlertSoundUrl(id: string): Promise<string> {
+    const headers: Record<string, string> = {};
+    if (this.accessToken) headers.Authorization = `Bearer ${this.accessToken}`;
+    const response = await fetch(`${API_BASE}/camera-rules/sounds/${id}/file/`, { headers });
+    if (!response.ok) throw new Error(`Could not load tune: ${response.status}`);
+    return URL.createObjectURL(await response.blob());
+  }
+
+  getRuleHits(after: number | null) {
+    const query = after === null ? "" : `?after=${after}`;
+    return this.request<{ latest: number; hits: RuleHit[] }>(`/camera-rules/hits/${query}`);
   }
 
   monitorCamerasTick(vision = true) {

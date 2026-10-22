@@ -14,7 +14,7 @@
     </option>
     <option name="sessionTitles">
       <map>
-        <entry key="9a80916c-69a8-45f8-af94-b60230efc6aa" value="extensions&gt;=4.16.0 (from anyio-&gt;httpx&lt;1.0,&gt;=0.27-&gt;" />
+        <entry key="9a80916c-69a8-45f8-af94-b60230efc6aa" value="extensions&gt;=4.16.0 (from anyio-&gt;httpx=0.27-&gt;-r req" />
       </map>
     </option>
   </component>

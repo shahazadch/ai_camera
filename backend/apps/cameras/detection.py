@@ -514,9 +514,9 @@ class LiveDetectionTracker:
         self._tracks: dict[str, list[dict]] = {}
         self._labels: dict[str, dict] = {}
         self._stairs_until: dict[str, float] = {}
-        # Per-camera count of people who have walked into view (person alerts).
-        # A counter, not a pulse, so a poller can't miss an arrival between polls.
-        self._arrivals: dict[str, int] = {}
+        # Per-camera (check, det) events for the rule engine, drained by
+        # pop_events() from whichever caller has the frame.
+        self._pending: dict[str, list[tuple[str, ObjectDetection]]] = {}
         self._lock = threading.Lock()
 
     def forget(self, camera_id: str) -> None:
@@ -526,7 +526,7 @@ class LiveDetectionTracker:
             self._tracks.pop(key, None)
             self._labels.pop(key, None)
             self._stairs_until.pop(key, None)
-            self._arrivals.pop(key, None)
+            self._pending.pop(key, None)
 
     def update(
         self,
@@ -671,7 +671,7 @@ class LiveDetectionTracker:
                     and int(track.get("hits", 0)) >= 2
                 ):
                     track["arrival_counted"] = True
-                    self._arrivals[key] = self._arrivals.get(key, 0) + 1
+                    self._queue_event(key, "any_person", track["det"])
 
             # Someone just stepped in from the bottom of the frame (stairs).
             # Pulse is short so the live view can sound the alert immediately.
@@ -687,6 +687,7 @@ class LiveDetectionTracker:
                     if _entered_from_below(track["det"], height):
                         track["stairs_alerted"] = True
                         entered = True
+                        self._queue_event(key, "stairs", track["det"])
                 if entered:
                     self._stairs_until[key] = now + 1.6
 
@@ -709,10 +710,15 @@ class LiveDetectionTracker:
             }
             return sticky_dets, sticky_labels
 
-    def arrival_seq(self, camera_id: str) -> int:
-        """How many people have walked into this camera's view since startup."""
+    def _queue_event(self, key: str, check: str, det: ObjectDetection) -> None:
+        # Caller holds self._lock. Cap so an unattended camera can't pile up.
+        pending = self._pending.setdefault(key, [])
+        if len(pending) < 50:
+            pending.append((check, det))
+
+    def pop_events(self, camera_id: str) -> list[tuple[str, ObjectDetection]]:
         with self._lock:
-            return int(self._arrivals.get(str(camera_id), 0))
+            return self._pending.pop(str(camera_id), [])
 
     def stairs_hot(self, camera_id: str) -> bool:
         """True for a short moment after a person enters from the bottom."""
@@ -842,6 +848,7 @@ class LivePersonWatcher:
                 live_detection_tracker.update(
                     camera_id, overlay, None, frame_h=int(frame.shape[0])
                 )
+                dispatch_rule_events(camera_id, frame)
                 with self._lock:
                     self._latest[camera_id] = (detections, time.time())
                     info = self._cameras.get(camera_id)
@@ -854,6 +861,23 @@ class LivePersonWatcher:
                     if info is not None:
                         info["inferred"] = time.time()
                 time.sleep(0.08)
+
+
+def dispatch_rule_events(camera_id: str, frame) -> None:
+    """Hand tracker arrivals / stairs entries to the rule engine with this frame."""
+    events = live_detection_tracker.pop_events(str(camera_id))
+    if not events:
+        return
+    from apps.rules import engine
+
+    for check, det in events:
+        engine.trigger(
+            str(camera_id),
+            check,
+            frame=frame,
+            box=(det.x, det.y, det.width, det.height),
+            confidence=float(det.confidence),
+        )
 
 
 live_person_watcher = LivePersonWatcher()
