@@ -42,6 +42,7 @@ export interface Camera {
   auto_record: boolean;
   rule_ids: string[];
   person_sensitivity: "high" | "normal" | "strict";
+  ignore_zones: number[][][];
   metadata: Record<string, unknown>;
   zone_name?: string | null;
   zone_polygon?: number[][] | null;

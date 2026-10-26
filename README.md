@@ -91,6 +91,31 @@ no CPU. On the Recordings page you can set:
 - **Quality**: *Standard* records the camera's sub-stream (~5 GB/day per camera); *High*
   records full resolution (~20 GB/day per camera).
 
+## AI models & licences
+
+Everything runs locally on the CPU with ONNX Runtime / OpenCV — no cloud, no API keys.
+
+| Job | Model (default) | Licence | Switch |
+|---|---|---|---|
+| People, animals, phones, bags… | **D-FINE-S** (Objects365→COCO, 480 px) | Apache-2.0 code; Objects365-pretrained weights **not assumed commercially cleared** | `DETECTOR=dfine` (fallback `yolov4tiny`) |
+| …same, commercial-safe | D-FINE-S (COCO only) | Apache-2.0 | `DFINE_WEIGHTS=coco` |
+| Face detection + recognition | **InsightFace SCRFD-10G + ArcFace R50** | **Non-commercial only** | `FACE_MODEL=insightface` |
+| Face detection + recognition (commercial-safe) | YuNet + SFace | MIT / Apache-2.0 | `FACE_MODEL=sface` |
+
+Models are downloaded once into `backend/models/` (`python3 backend/scripts/fetch_models.py`)
+and copied into the image; `docker compose build` downloads anything missing. Licences and
+sources are listed in the generated `models/MODELS.md`.
+
+**Before using this commercially, set `DFINE_WEIGHTS=coco` and `FACE_MODEL=sface`.**
+Saved people are re-scanned automatically with the new face model; nobody has to enroll again.
+
+Published accuracy: D-FINE-S 50.7 AP on COCO (48.5 COCO-only) vs YOLOv4-tiny 22.0 AP;
+ArcFace R50 (buffalo_l) LFW 99.83 / CFP-FP 99.33 vs SFace LFW 99.40.
+
+Measured on this site's own footage: D-FINE found 2.5× more of the hard (blurry, distant)
+people than the old YOLOv4-tiny and labels farm animals as animals; the InsightFace detector
+produced no fake faces on cow snapshots (YuNet: 5 of 16).
+
 ## Camera rules (sounds, photos, alerts)
 
 Open **Camera Rules** in the sidebar. A rule says *what to detect*, *when* and *what to do*:

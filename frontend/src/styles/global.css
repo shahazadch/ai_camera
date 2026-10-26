@@ -1290,6 +1290,13 @@ a.btn:visited {
 }
 .person-alert-window label { display: grid; gap: 0.25rem; font-size: 0.85rem; }
 .sensitivity-field { display: grid; gap: 0.3rem; margin-top: 1rem; }
+.ignore-zones { display: grid; gap: 0.6rem; }
+.ignore-zones-canvas { position: relative; cursor: crosshair; user-select: none; }
+.ignore-zones-canvas img { display: block; width: 100%; border-radius: 8px; }
+.ignore-zones-canvas svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.zone-saved { fill: rgba(220, 60, 60, 0.28); stroke: #e04848; stroke-width: 0.4; }
+.zone-draft { fill: none; stroke: #ffd24d; stroke-width: 0.4; stroke-dasharray: 1 0.6; }
+.zone-point { fill: #ffd24d; }
 .rule-option span { display: grid; gap: 0.1rem; }
 .rule-option small { font-size: 0.76rem; }
 .recording-settings {

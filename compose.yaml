@@ -63,6 +63,9 @@ services:
       OPENCV_THREADS: ${OPENCV_THREADS:-2}
       VISION_LLM_BASE_URL: ${VISION_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
       LIVE_DETECT_FPS: ${LIVE_DETECT_FPS:-4}
+      DETECTOR: ${DETECTOR:-dfine}
+      DFINE_WEIGHTS: ${DFINE_WEIGHTS:-obj2coco}
+      FACE_MODEL: ${FACE_MODEL:-insightface}
       ALERT_TIME_ZONE: ${ALERT_TIME_ZONE:-Asia/Karachi}
       ALERT_PLAYER_KEY: ${ALERT_PLAYER_KEY:-alert-dev-key-change-me}
     mem_limit: 1g

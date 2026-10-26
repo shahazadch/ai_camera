@@ -18,6 +18,7 @@ from .embeddings import (
     APPEARANCE_DIM,
     APPEARANCE_MODEL,
     APPEARANCE_VERSION,
+    DEFAULT_MATCH_THRESHOLD,
     appearance_embedding_from_bytes,
     best_match,
 )
@@ -87,7 +88,7 @@ def enroll_face_bytes(
             "Hold steady and upload a sharper image."
         )
     engine = getattr(scanned, "engine", "unknown")
-    if engine not in {"sface", "yunet", "haar"} and not getattr(scanned, "feature", None):
+    if engine not in {"insightface", "sface"} or not getattr(scanned, "feature", None):
         raise ValueError(f"Face AI could not extract identity particles on {angle_label} photo.")
 
     if make_primary:
@@ -439,7 +440,7 @@ def _build_gallery(organization_id) -> list[tuple[str, list[float], FaceEmbeddin
 def recognize_embedding(
     organization_id,
     embedding: list[float],
-    threshold: float = 0.32,
+    threshold: float = DEFAULT_MATCH_THRESHOLD,
     min_margin: float = 0.05,
     person_types: list[str] | None = None,
 ) -> tuple[Person | None, float, FaceEmbedding | None]:
@@ -467,7 +468,7 @@ def recognize_embedding(
         return None, score, None
     meta = person.metadata or {}
     # Partial enrollments need a slightly stronger hit (fewer angles to trust).
-    if not meta.get("identity_mature") and score < max(threshold, 0.34):
+    if not meta.get("identity_mature") and score < threshold + 0.02:
         return None, score, None
     emb = next((e for pid, _, e in gallery if pid == person_id), None)
     return person, score, emb

@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { AlertSound, api, Camera, CameraRule, Site, ZoneInfo } from "../api/client";
 import Icon from "../components/Icon";
 import { ruleSummary } from "../ruleSummary";
+import IgnoreZonesEditor from "../components/IgnoreZonesEditor";
 
 // Third value false = not built yet; shown greyed so the form doesn't promise it.
 const AI_MODULES: Array<[string, string, boolean]> = [
@@ -24,6 +25,7 @@ type CameraForm = {
   auto_record: boolean;
   rule_ids: string[];
   person_sensitivity: "high" | "normal" | "strict";
+  ignore_zones: number[][][];
 };
 
 const EMPTY_FORM: CameraForm = {
@@ -42,6 +44,7 @@ const EMPTY_FORM: CameraForm = {
   auto_record: true,
   rule_ids: [],
   person_sensitivity: "high",
+  ignore_zones: [],
 };
 
 const LIVE_PREVIEW_STORAGE_KEY = "sentinelvision.live-camera-ids";
@@ -358,6 +361,7 @@ export default function CamerasPage() {
   const [editing, setEditing] = useState<Camera | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState<CameraForm>(EMPTY_FORM);
+  const [zonesEdited, setZonesEdited] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testingId, setTestingId] = useState("");
   const [message, setMessage] = useState("");
@@ -441,6 +445,7 @@ export default function CamerasPage() {
     setForm({ ...EMPTY_FORM, site: sites[0]?.id || "" });
     setError("");
     setMessage("");
+    setZonesEdited(false);
     setFormOpen(true);
   }
 
@@ -456,9 +461,11 @@ export default function CamerasPage() {
       auto_record: camera.auto_record !== false,
       rule_ids: (camera.rule_ids || []).map(String),
       person_sensitivity: camera.person_sensitivity || "high",
+      ignore_zones: camera.ignore_zones || [],
     });
     setError("");
     setMessage("");
+    setZonesEdited(false);
     setFormOpen(true);
   }
 
@@ -474,7 +481,14 @@ export default function CamerasPage() {
     const resumePreviews = new Set(previewIds);
     setPreviewIds(new Set());
     try {
-      const payload = { ...form, zone: form.zone || null };
+      // Send ignore areas only when edited here, so a page loaded before someone
+      // else changed them can't silently wipe them on an unrelated save.
+      const { ignore_zones, ...rest } = form;
+      const payload = {
+        ...rest,
+        zone: form.zone || null,
+        ...(zonesEdited ? { ignore_zones } : {}),
+      };
       if (editing) await api.updateCamera(editing.id, payload);
       else await api.createCamera(payload);
       setFormOpen(false);
@@ -777,6 +791,20 @@ export default function CamerasPage() {
                 night) from being boxed as a person.
               </small>
             </label>
+
+            {editing && (
+              <fieldset className="module-picker">
+                <legend>Ignore areas (detection mask)</legend>
+                <IgnoreZonesEditor
+                  cameraId={editing.id}
+                  zones={form.ignore_zones}
+                  onChange={(ignore_zones) => {
+                    setZonesEdited(true);
+                    setForm({ ...form, ignore_zones });
+                  }}
+                />
+              </fieldset>
+            )}
 
             <fieldset className="module-picker">
               <legend>Rules on this camera</legend>

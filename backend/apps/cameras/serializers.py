@@ -4,7 +4,7 @@ from rest_framework import serializers
 
 from apps.rules.models import Rule
 
-from .detection import PERSON_SENSITIVITY, person_sensitivity
+from .detection import PERSON_SENSITIVITY, ignore_zones, person_sensitivity
 from .models import Camera, EdgeDevice, VisionCapture
 
 
@@ -19,6 +19,8 @@ class CameraSerializer(serializers.ModelSerializer):
     person_sensitivity = serializers.ChoiceField(
         choices=list(PERSON_SENSITIVITY), required=False, write_only=True
     )
+    # Detection mask: polygons ([[x, y], ...] in 0..1) where person boxes are ignored.
+    ignore_zones = serializers.JSONField(required=False, write_only=True)
     # Rules switched on for this camera (apply-to-all rules are implied, not listed).
     rule_ids = serializers.PrimaryKeyRelatedField(
         source="rules", many=True, queryset=Rule.objects.all(), required=False
@@ -45,6 +47,7 @@ class CameraSerializer(serializers.ModelSerializer):
             "auto_record",
             "rule_ids",
             "person_sensitivity",
+            "ignore_zones",
             "created_at",
             "updated_at",
         )
@@ -63,13 +66,38 @@ class CameraSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         data = super().to_representation(instance)
         data["person_sensitivity"] = person_sensitivity(instance)
+        data["ignore_zones"] = ignore_zones(instance)
         return data
 
+    def validate_ignore_zones(self, value):
+        if not isinstance(value, list) or len(value) > 10:
+            raise serializers.ValidationError("Send up to 10 areas.")
+        zones = []
+        for zone in value:
+            if not isinstance(zone, list) or not 3 <= len(zone) <= 40:
+                raise serializers.ValidationError("Each area needs 3 to 40 points.")
+            points = []
+            for point in zone:
+                try:
+                    x, y = float(point[0]), float(point[1])
+                except (TypeError, ValueError, IndexError):
+                    raise serializers.ValidationError("Points are [x, y] numbers.")
+                if not (0 <= x <= 1 and 0 <= y <= 1):
+                    raise serializers.ValidationError("Points must be inside the picture (0 to 1).")
+                points.append([round(x, 4), round(y, 4)])
+            zones.append(points)
+        return zones
+
     def _merge_sensitivity(self, validated_data, instance=None):
-        sensitivity = validated_data.pop("person_sensitivity", None)
-        if sensitivity is not None:
+        """person_sensitivity / ignore_zones live in Camera.metadata (no migration)."""
+        updates = {
+            key: validated_data.pop(key)
+            for key in ("person_sensitivity", "ignore_zones")
+            if key in validated_data
+        }
+        if updates:
             metadata = dict(validated_data.get("metadata") or getattr(instance, "metadata", None) or {})
-            metadata["person_sensitivity"] = sensitivity
+            metadata.update(updates)
             validated_data["metadata"] = metadata
         return validated_data
 

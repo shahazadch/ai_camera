@@ -102,6 +102,9 @@ class ObjectDetection:
     height: int
     confidence: float
     class_name: str
+    # D-FINE only: highest animal-class score on the same box. Cows at night
+    # often come out "person" with a little animal score attached.
+    animal_score: float = 0.0
 
 
 def _iou(a: ObjectDetection, b: ObjectDetection) -> float:
@@ -117,16 +120,32 @@ def _iou(a: ObjectDetection, b: ObjectDetection) -> float:
     return inter / union if union else 0.0
 
 
-def _nms(detections: list[ObjectDetection], iou_threshold: float = 0.4) -> list[ObjectDetection]:
+def _nms(
+    detections: list[ObjectDetection], iou_threshold: float = 0.4, *, per_class: bool = False
+) -> list[ObjectDetection]:
     kept: list[ObjectDetection] = []
     for det in sorted(detections, key=lambda item: item.confidence, reverse=True):
-        if all(_iou(det, existing) < iou_threshold for existing in kept):
+        if all(
+            _iou(det, existing) < iou_threshold
+            for existing in kept
+            if not per_class or existing.class_name == det.class_name
+        ):
             kept.append(det)
     return kept
 
 
 # Per-camera "person detection sensitivity" → lowest person confidence accepted.
-PERSON_SENSITIVITY = {"high": 0.20, "normal": 0.35, "strict": 0.50}
+# Scores mean different things per model, so each detector has its own scale.
+PERSON_SENSITIVITY = {"high": 0.20, "normal": 0.35, "strict": 0.50}  # YOLOv4-tiny
+# Measured on full night frames from site cameras: dark doorways, cows and the
+# tractor score 0.25–0.42 as "person", so High starts above that band.
+DFINE_PERSON_SENSITIVITY = {"high": 0.40, "normal": 0.50, "strict": 0.55}
+# Strict cameras: a person box that also scores this much as an animal needs
+# STRICT_SURE_PERSON to count (removed 61 of 64 cow boxes on the farm camera).
+STRICT_ANIMAL_SCORE = 0.15
+STRICT_SURE_PERSON = 0.7
+# Every camera: a weak person box that also looks partly like an animal is dropped.
+WEAK_PERSON_WITH_ANIMAL = 0.5
 DEFAULT_PERSON_SENSITIVITY = "high"
 
 
@@ -136,13 +155,75 @@ def person_sensitivity(camera) -> str:
 
 
 def person_min_confidence(camera) -> float:
-    return PERSON_SENSITIVITY[person_sensitivity(camera)]
+    return object_detector.person_sensitivity_scale[person_sensitivity(camera)]
 
 
 def drop_weak_persons(detections: list, min_confidence: float) -> list:
-    return [
-        det for det in detections if det.class_name not in PERSON_CLASSES or det.confidence >= min_confidence
-    ]
+    strict = min_confidence >= object_detector.person_sensitivity_scale["strict"]
+
+    def keep(det) -> bool:
+        if det.class_name not in PERSON_CLASSES:
+            return True
+        if det.confidence < min_confidence:
+            return False
+        if det.animal_score >= STRICT_ANIMAL_SCORE:
+            sure = STRICT_SURE_PERSON if strict else WEAK_PERSON_WITH_ANIMAL
+            return det.confidence >= sure
+        return True
+
+    return [det for det in detections if keep(det)]
+
+
+def ignore_zones(camera) -> list:
+    """Per-camera ignore areas: polygons of [x, y] points in 0..1 image coordinates."""
+    zones = (getattr(camera, "metadata", None) or {}).get("ignore_zones") or []
+    return [zone for zone in zones if isinstance(zone, list) and len(zone) >= 3]
+
+
+def _point_in_polygon(px: float, py: float, polygon: list) -> bool:
+    inside = False
+    j = len(polygon) - 1
+    for i in range(len(polygon)):
+        xi, yi = polygon[i]
+        xj, yj = polygon[j]
+        if (yi > py) != (yj > py) and px < (xj - xi) * (py - yi) / ((yj - yi) or 1e-9) + xi:
+            inside = not inside
+        j = i
+    return inside
+
+
+def drop_in_ignore_zones(detections: list, zones: list, frame_w: int, frame_h: int) -> list:
+    """
+    Detection mask (standard NVR feature): drop person boxes whose feet — the
+    bottom-centre of the box — stand inside an ignore area, e.g. an animal pen.
+    """
+    if not zones or frame_w <= 0 or frame_h <= 0:
+        return detections
+
+    def masked(det) -> bool:
+        fx = (det.x + det.width / 2) / frame_w
+        fy = (det.y + det.height) / frame_h
+        return any(_point_in_polygon(fx, fy, zone) for zone in zones)
+
+    return [det for det in detections if det.class_name not in PERSON_CLASSES or not masked(det)]
+
+
+_persist_lock = threading.Lock()
+_previous_persons: dict[str, list] = {}
+
+
+def require_two_sightings(camera_id: str, detections: list) -> list:
+    """
+    Keep a person box only if a person was also seen there on the previous
+    check (~0.25 s earlier). One-frame flickers (a shadow or animal edging over
+    the bar) never get a box; a real person costs one extra check.
+    """
+    persons = [det for det in detections if det.class_name in PERSON_CLASSES]
+    with _persist_lock:
+        previous = _previous_persons.get(str(camera_id), [])
+        _previous_persons[str(camera_id)] = persons
+    confirmed = {id(det) for det in persons if any(_iou(det, old) >= 0.3 for old in previous)}
+    return [det for det in detections if det.class_name not in PERSON_CLASSES or id(det) in confirmed]
 
 
 def _covered_fraction(inner: "ObjectDetection", outer: "ObjectDetection") -> float:
@@ -339,6 +420,9 @@ class OpenCVObjectDetector:
         self.model_name = "yolov4-tiny"
         self.model_version = "coco-80"
         self.last_fast_ms = 0.0
+        self.person_sensitivity_scale = PERSON_SENSITIVITY
+        # YOLO repeats a box per class, so overlaps across classes are duplicates.
+        self.per_class_nms = False
 
     def _download(self, url: str, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -524,7 +608,9 @@ class OpenCVObjectDetector:
                 working = self._enhance(frame)
             raw = self._infer_single(working, confidence_threshold, input_size=input_size)
             candidates = [det for det in raw if _is_plausible_box(det, orig_w, orig_h)]
-            deduped = _suppress_animal_persons(_nms(candidates, iou_threshold=0.45))
+            deduped = _suppress_animal_persons(
+                _nms(candidates, iou_threshold=0.45, per_class=self.per_class_nms)
+            )
             if focus:
                 deduped = _focus_only(deduped, orig_w, orig_h)
             self.last_fast_ms = (time.perf_counter() - started) * 1000.0
@@ -545,7 +631,115 @@ class OpenCVObjectDetector:
         )
 
 
-object_detector = OpenCVObjectDetector()
+# Baked into the image (not the model_cache volume, which would hide image updates).
+MODELS_DIR = Path(os.getenv("MODELS_DIR", "/opt/models"))
+# obj2coco (default) is the most accurate but its Objects365 pre-training isn't
+# assumed commercially cleared; DFINE_WEIGHTS=coco uses the COCO-only checkpoint.
+DFINE_WEIGHTS = "coco" if os.getenv("DFINE_WEIGHTS", "obj2coco").lower() == "coco" else "obj2coco"
+DFINE_MODEL_PATH = MODELS_DIR / "dfine" / f"dfine_s_{DFINE_WEIGHTS}.onnx"
+DFINE_INPUT_SIZE = int(os.getenv("DFINE_INPUT_SIZE", "480"))
+
+
+class DFineObjectDetector(OpenCVObjectDetector):
+    """
+    D-FINE-S (Objects365 → COCO, Apache-2.0) on ONNX Runtime.
+
+    Transformer detector: one box per query, no NMS needed. On this site's
+    footage it finds about 2.5x more of the hard (blurry, distant) people than
+    YOLOv4-tiny and labels farm animals as animals instead of people.
+    Same outputs and filters as the YOLO detector it replaces.
+    """
+
+    def __init__(self, model_path: Path = DFINE_MODEL_PATH):
+        super().__init__()
+        self.model_path = Path(model_path)
+        self.model_name = "d-fine-s"
+        self.model_version = self.model_path.stem.removeprefix("dfine_s_")
+        self.person_sensitivity_scale = DFINE_PERSON_SENSITIVITY
+        self.per_class_nms = True
+        self._session = None
+
+    def available(self) -> bool:
+        return self.model_path.is_file()
+
+    def _load(self):
+        if self._session is not None:
+            return self._session
+        if self._load_error is not None:
+            return None
+        with opencv_lock:
+            if self._session is not None or self._load_error is not None:
+                return self._session
+            try:
+                import onnxruntime as ort
+
+                options = ort.SessionOptions()
+                options.intra_op_num_threads = int(os.getenv("OPENCV_THREADS", "2")) * 2
+                options.log_severity_level = 3
+                self._session = ort.InferenceSession(
+                    str(self.model_path), options, providers=["CPUExecutionProvider"]
+                )
+                logger.info("Loaded D-FINE-S detector (%s, %spx)", self.model_version, DFINE_INPUT_SIZE)
+            except Exception as exc:
+                self._load_error = str(exc)
+                logger.warning("D-FINE unavailable: %s", exc)
+            return self._session
+
+    def _infer_single(self, frame, confidence_threshold: float, *, input_size: int = 416) -> list[ObjectDetection]:
+        import cv2
+
+        session = self._load()
+        if session is None:
+            return []
+        height, width = frame.shape[:2]
+        size = DFINE_INPUT_SIZE
+        # The model was trained on a plain resize to a square (no letterbox).
+        pixels = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), (size, size)).astype(np.float32) / 255.0
+        logits, boxes = session.run(None, {"pixel_values": pixels.transpose(2, 0, 1)[None]})
+        scores = 1.0 / (1.0 + np.exp(-logits[0]))
+        animal_ids = [i for i, name in enumerate(self._classes) if name in ANIMAL_CLASSES]
+        detections: list[ObjectDetection] = []
+        for query, class_id in zip(*np.where(scores >= min(confidence_threshold, 0.18))):
+            confidence = float(scores[query, class_id])
+            class_name = self._classes[class_id] if class_id < len(self._classes) else ""
+            if not class_name:
+                continue
+            minimum = (
+                self.person_sensitivity_scale["high"] if class_name in PERSON_CLASSES else _min_confidence(class_name)
+            )
+            if confidence < max(confidence_threshold, minimum):
+                continue
+            cx, cy, bw, bh = (float(v) for v in boxes[0][query])
+            x = max(0, int((cx - bw / 2) * width))
+            y = max(0, int((cy - bh / 2) * height))
+            box_w = max(1, min(width - x, int(bw * width)))
+            box_h = max(1, min(height - y, int(bh * height)))
+            detections.append(
+                ObjectDetection(
+                    x=x,
+                    y=y,
+                    width=box_w,
+                    height=box_h,
+                    confidence=confidence,
+                    class_name=class_name,
+                    animal_score=float(scores[query, animal_ids].max()) if animal_ids else 0.0,
+                )
+            )
+        return detections
+
+
+def _build_detector() -> OpenCVObjectDetector:
+    """DETECTOR=dfine (default) or yolov4tiny; D-FINE falls back to YOLO if its model is missing."""
+    choice = os.getenv("DETECTOR", "dfine").lower()
+    if choice == "dfine":
+        detector = DFineObjectDetector()
+        if detector.available():
+            return detector
+        logger.warning("D-FINE model not found at %s; using YOLOv4-tiny", detector.model_path)
+    return OpenCVObjectDetector()
+
+
+object_detector = _build_detector()
 
 
 class LiveDetectionTracker:
@@ -818,7 +1012,9 @@ class LivePersonWatcher:
         thread = self._thread
         return bool(thread and thread.is_alive())
 
-    def touch(self, camera_id: str, source_url: str, min_person_confidence: float = 0.20) -> None:
+    def touch(
+        self, camera_id: str, source_url: str, min_person_confidence: float = 0.20, zones: list | None = None
+    ) -> None:
         if not camera_id or not source_url:
             return
         now = time.time()
@@ -830,11 +1026,13 @@ class LivePersonWatcher:
                     "touched": now,
                     "inferred": 0.0,
                     "min_person": min_person_confidence,
+                    "zones": zones or [],
                 }
             else:
                 current["url"] = source_url
                 current["touched"] = now
                 current["min_person"] = min_person_confidence
+                current["zones"] = zones or []
             if not self.running:
                 self._thread = threading.Thread(
                     target=self._loop, name="live-person-watch", daemon=True
@@ -864,9 +1062,17 @@ class LivePersonWatcher:
                     self._latest.pop(cid, None)
             for cid in stale:
                 live_detection_tracker.forget(cid)
+                with _persist_lock:
+                    _previous_persons.pop(cid, None)
             with self._lock:
                 cams = [
-                    (cid, info["url"], float(info.get("inferred") or 0.0), float(info.get("min_person") or 0.2))
+                    (
+                        cid,
+                        info["url"],
+                        float(info.get("inferred") or 0.0),
+                        float(info.get("min_person") or 0.2),
+                        info.get("zones") or [],
+                    )
                     for cid, info in self._cameras.items()
                     if info.get("url")
                 ]
@@ -875,7 +1081,7 @@ class LivePersonWatcher:
                 continue
 
             cams.sort(key=lambda item: item[2])
-            camera_id, url, inferred, min_person = cams[0]
+            camera_id, url, inferred, min_person, zones = cams[0]
             # Cap passes per camera; back-to-back inference pinned a CPU core.
             wait = LIVE_DETECT_INTERVAL - (time.time() - inferred)
             if wait > 0:
@@ -890,9 +1096,13 @@ class LivePersonWatcher:
                 input_size = 320
                 if self._pass % 4 == 0 and object_detector.last_fast_ms < 180:
                     input_size = 416
-                detections = drop_weak_persons(
-                    object_detector.detect_fast(frame, input_size=input_size), min_person
+                detections = drop_in_ignore_zones(
+                    drop_weak_persons(object_detector.detect_fast(frame, input_size=input_size), min_person),
+                    zones,
+                    int(frame.shape[1]),
+                    int(frame.shape[0]),
                 )
+                detections = require_two_sightings(camera_id, detections)
                 overlay = [
                     det
                     for det in detections
@@ -948,7 +1158,9 @@ def boot_person_watcher() -> None:
             from apps.cameras.models import Camera
 
             for camera in Camera.objects.filter(is_active=True).exclude(rtsp_url=""):
-                live_person_watcher.touch(str(camera.id), camera.rtsp_url, person_min_confidence(camera))
+                live_person_watcher.touch(
+                    str(camera.id), camera.rtsp_url, person_min_confidence(camera), ignore_zones(camera)
+                )
         except Exception:
             logger.debug("Person watcher boot skipped", exc_info=True)
 

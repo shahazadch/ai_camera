@@ -1,4 +1,4 @@
-"""Embedding utilities — OpenCV SFace identity particles (fallback: LBP)."""
+"""Embedding utilities — identity vectors from the active face engine (see face_ai)."""
 
 from __future__ import annotations
 
@@ -8,14 +8,18 @@ from typing import Iterable
 
 import numpy as np
 
-APPEARANCE_MODEL = "opencv-sface"
-# Bump forces gallery re-embed after SFace backend change (OpenCV FaceRecognizerSF).
-APPEARANCE_VERSION = "3.2.0"
-APPEARANCE_DIM = 128
+from .face_ai import engine_info
 
-# SFace cosine — official ~0.363; CCTV live a bit lower, but stay strict
-# so strangers are not mislabeled as saved members.
-DEFAULT_MATCH_THRESHOLD = 0.32
+# Name/version/size of the active face model's vectors. A different engine (or a
+# version bump) makes the gallery re-embed saved people from their enrollment crops.
+_ENGINE = engine_info()
+APPEARANCE_MODEL = _ENGINE["model"]
+APPEARANCE_VERSION = _ENGINE["version"]
+APPEARANCE_DIM = _ENGINE["dim"]
+
+# Cosine thresholds per engine, measured on this site's enrolled people: strict
+# enough that strangers are not mislabeled as saved members.
+DEFAULT_MATCH_THRESHOLD = _ENGINE["threshold"]
 DEFAULT_MATCH_MARGIN = 0.05
 
 
@@ -39,46 +43,21 @@ def simulate_embedding_from_bytes(data: bytes, dim: int = 128) -> list[float]:
 
 def appearance_embedding_from_bytes(data: bytes, dim: int = APPEARANCE_DIM) -> list[float]:
     """
-    Extract face identity particles from an image.
+    Identity vector for the face in an image, or [] when no real face is found.
 
-    Prefers OpenCV SFace (real face AI). Falls back to local LBP if models
-    are missing or no face can be embedded.
+    There is deliberately no non-AI fallback: texture descriptors made "faces"
+    out of fur and walls, which then showed up as unknown people.
     """
     try:
         from .face_ai import embed_image_bytes, models_available
 
         if models_available():
             vector = embed_image_bytes(data)
-            if vector and len(vector) == APPEARANCE_DIM:
+            if vector and len(vector) == dim:
                 return l2_normalize(vector)
     except Exception:
         pass
-
-    return _lbp_embedding_from_bytes(data, dim=dim)
-
-
-def _lbp_embedding_from_bytes(data: bytes, dim: int = 128) -> list[float]:
-    """Compact fallback descriptor when SFace is unavailable."""
-    try:
-        import cv2
-    except Exception:
-        return simulate_embedding_from_bytes(data, dim=dim)
-
-    array = np.frombuffer(data, dtype=np.uint8)
-    image = cv2.imdecode(array, cv2.IMREAD_COLOR)
-    if image is None or image.size == 0:
-        return simulate_embedding_from_bytes(data, dim=dim)
-
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    gray = cv2.resize(gray, (64, 64), interpolation=cv2.INTER_AREA)
-    gray = cv2.equalizeHist(gray)
-    flat = (gray.astype(np.float32) / 255.0 * 2.0) - 1.0
-    vector = flat.flatten()
-    if len(vector) < dim:
-        vector = np.pad(vector, (0, dim - len(vector)))
-    else:
-        vector = vector[:dim]
-    return l2_normalize(vector.tolist())
+    return []
 
 
 def best_match(
@@ -139,7 +118,7 @@ def best_match(
 
     # Strong accept only. Soft path needs multi-angle support + clear margin
     # so one weak random hit never becomes a saved-member name.
-    soft_threshold = max(0.28, threshold - 0.03)
+    soft_threshold = max(threshold - 0.04, threshold * 0.88)
     accepted = best_score >= threshold
     if not accepted and best_score >= soft_threshold and angle_count >= 2:
         if support >= soft_threshold and (best_score - rival) >= max(0.06, min_margin):

@@ -14,6 +14,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# AI runtime in its own layer so changing it doesn't re-download everything above.
+COPY requirements-ai.txt .
+RUN pip install --no-cache-dir --default-timeout=120 --retries 10 -r requirements-ai.txt
+
+# Current AI models (D-FINE, InsightFace) in /opt/models — outside the
+# model_cache volume, so image updates always reach the container. Files already
+# in backend/models/ are reused; only missing ones are downloaded.
+COPY models/ /opt/models/
+COPY scripts/fetch_models.py /tmp/fetch_models.py
+RUN python /tmp/fetch_models.py --dest /opt/models
+
 # Bake YOLOv4-tiny into the image so detection works offline on first start.
 # The model_cache volume is seeded from here when it is first created.
 RUN mkdir -p /app/model_cache/yolov4_tiny && cd /app/model_cache/yolov4_tiny \

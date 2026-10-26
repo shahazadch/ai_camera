@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 
 from apps.common.permissions import TenantQuerysetMixin, require_role
 from apps.events.models import DetectionEvent
+from apps.identity.embeddings import DEFAULT_MATCH_THRESHOLD
 from apps.tenancy.models import Role
 
 from .authentication import EdgeAPIKeyAuthentication, EdgeServiceUser
@@ -170,10 +171,12 @@ class CameraFrameView(APIView):
         verify = {"verified": 0, "unknown": 0, "blacklist": 0, "labels": [], "issues": [], "dangers": 0}
         # Keep the fast person loop alive while this camera is on screen.
         try:
-            from .detection import live_person_watcher, person_min_confidence
+            from .detection import ignore_zones, live_person_watcher, person_min_confidence
 
             if camera.rtsp_url:
-                live_person_watcher.touch(str(camera.id), camera.rtsp_url, person_min_confidence(camera))
+                live_person_watcher.touch(
+                    str(camera.id), camera.rtsp_url, person_min_confidence(camera), ignore_zones(camera)
+                )
         except Exception:
             pass
 
@@ -875,8 +878,13 @@ _IDENTITY_CONFIRM: dict[str, dict] = {}
 # Temporarily off — re-enable when thief / blacklist alerts are needed again.
 THIEF_DETECTION_ENABLED = False
 # A person is only reported UNKNOWN with a clear real face on a confident box.
-UNKNOWN_MIN_FACE_SCORE = 0.6
 UNKNOWN_MIN_PERSON_CONFIDENCE = 0.40
+
+
+def _unknown_min_face_score() -> float:
+    from apps.identity.face_ai import engine_info
+
+    return float(engine_info()["clear_face"])
 
 
 _STATE_MAX_AGE_SEC = 120.0  # longest cooldown above is 30 s
@@ -914,7 +922,7 @@ def _remember_identity(slot_key: str, result: dict, now: float) -> None:
     if result.get("status") not in {"verified", "blacklist"}:
         return
     # Only stick strong matches — weak ones caused repeated wrong names.
-    if float(result.get("match_score") or 0.0) < 0.32:
+    if float(result.get("match_score") or 0.0) < DEFAULT_MATCH_THRESHOLD:
         return
     _IDENTITY_HOLD[slot_key] = {
         "result": {
@@ -954,7 +962,7 @@ def _confirm_identity(slot_key: str, person_id: str, score: float, now: float) -
     True only after the same saved person matches twice in a short window,
     or once with a very strong SFace score.
     """
-    if score >= 0.40:
+    if score >= DEFAULT_MATCH_THRESHOLD + 0.08:
         _IDENTITY_CONFIRM.pop(slot_key, None)
         return True
     prev = _IDENTITY_CONFIRM.get(slot_key) or {}
@@ -1252,17 +1260,14 @@ def _process_person_box(
     face_found = False
     scanned = None
     match_bytes = image_bytes
-    # Prefer a solid face crop; fall back to smaller faces for distant CCTV.
-    for min_face in (36, 24, 18):
-        try:
-            scanned = scan_face_from_bytes(image_bytes, require_face=True, min_size=min_face)
-            match_bytes = scanned.face_jpeg
-            face_found = scanned.face_count > 0 and not scanned.used_full_image
-            if face_found:
-                break
-        except Exception:
-            face_found = False
-            scanned = None
+    # The face detector handles small/distant faces itself; one pass is enough.
+    try:
+        scanned = scan_face_from_bytes(image_bytes, require_face=True)
+        match_bytes = scanned.face_jpeg
+        face_found = scanned.face_count > 0 and not scanned.used_full_image
+    except Exception:
+        face_found = False
+        scanned = None
 
     # Clear face crop is for unknown / thief capture only (not enrolled members).
     # We decide after recognition; keep scanned.face for matching bytes.
@@ -1324,7 +1329,7 @@ def _process_person_box(
     person, match_score, _emb = recognize_embedding(
         camera.site.organization_id,
         embedding,
-        threshold=0.32,
+        threshold=DEFAULT_MATCH_THRESHOLD,
         min_margin=0.05,
     )
     # Optional second pass on face crop only (never full-body — that mislabels).
@@ -1334,7 +1339,7 @@ def _process_person_box(
             alt_person, alt_score, alt_emb = recognize_embedding(
                 camera.site.organization_id,
                 alt_embedding,
-                threshold=0.32,
+                threshold=DEFAULT_MATCH_THRESHOLD,
                 min_margin=0.05,
             )
             if alt_person is not None and alt_score >= float(match_score or 0.0):
@@ -1552,12 +1557,12 @@ def _process_person_box(
         _remember_identity(slot_key, verified, now)
         return verified
 
-    # UNKNOWN only for a clear YuNet face on a confident person box. Haar's
-    # fallback "faces" and weak YOLO persons were turning animals into
-    # unknown people (farm cameras): show them as plain PERSON instead.
+    # UNKNOWN only for a clear AI face on a confident person box. Weak faces
+    # and weak person guesses were turning animals into unknown people (farm
+    # cameras): show them as plain PERSON instead.
     if (
-        getattr(scanned, "engine", "") != "sface"
-        or float(getattr(scanned, "face_score", 0.0) or 0.0) < UNKNOWN_MIN_FACE_SCORE
+        getattr(scanned, "engine", "") not in {"insightface", "sface"}
+        or float(getattr(scanned, "face_score", 0.0) or 0.0) < _unknown_min_face_score()
         or float(confidence or 0.0) < UNKNOWN_MIN_PERSON_CONFIDENCE
     ):
         _discard_snapshot(relative_path)
@@ -1862,8 +1867,9 @@ def _draw_detection_boxes(frame, detections, person_labels: dict | None = None) 
             color = (90, 210, 140)
             label = f"{info} {confidence:.0%}"
         else:
-            color = (60, 165, 250)
-            label = f"UNKNOWN {confidence:.0%}"
+            # Not face-checked yet: it's a person box, not an UNKNOWN verdict.
+            color = (180, 180, 180)
+            label = f"PERSON {confidence:.0%}"
 
         thickness = max(2, int(round(frame.shape[1] / 640)))
         cv2.rectangle(frame, (x, y), (x + width, y + height), color, thickness)
@@ -1891,13 +1897,21 @@ def _draw_detection_boxes(frame, detections, person_labels: dict | None = None) 
 
 def _quick_detections(frame, camera) -> list:
     """Person boxes from the live watcher, without a second slow YOLO pass."""
-    from .detection import drop_weak_persons, live_person_watcher, object_detector, person_min_confidence
+    from .detection import (
+        drop_in_ignore_zones,
+        drop_weak_persons,
+        ignore_zones,
+        live_person_watcher,
+        object_detector,
+        person_min_confidence,
+    )
 
     camera_id = str(camera.id)
     source = getattr(camera, "rtsp_url", "") or ""
     min_person = person_min_confidence(camera)
+    zones = ignore_zones(camera)
     if source:
-        live_person_watcher.touch(camera_id, source, min_person)
+        live_person_watcher.touch(camera_id, source, min_person, zones)
     cached = live_person_watcher.latest(camera_id, max_age=0.9)
     if cached is not None:
         return cached
@@ -1905,7 +1919,12 @@ def _quick_detections(frame, camera) -> list:
     if live_person_watcher.running:
         stale = live_person_watcher.latest(camera_id, max_age=2.5)
         return stale or []
-    return drop_weak_persons(object_detector.detect_fast(frame, input_size=320), min_person)
+    return drop_in_ignore_zones(
+        drop_weak_persons(object_detector.detect_fast(frame, input_size=320), min_person),
+        zones,
+        int(frame.shape[1]),
+        int(frame.shape[0]),
+    )
 
 
 def _detect_and_record(frame, camera) -> tuple[int, list[str], dict]:
@@ -2105,7 +2124,10 @@ def _detect_and_record(frame, camera) -> tuple[int, list[str], dict]:
                             if result.get("name"):
                                 result["label"] = f"{result['name']} · MOBILE"
                     rule_status = result.get("status")
-                    if rule_status == "unknown":
+                    # "pending" = body seen, face not readable. Not proven saved,
+                    # so it still counts as unknown for alarms (a held saved
+                    # name comes back as "verified" and stays quiet).
+                    if rule_status in {"unknown", "pending"}:
                         rule_engine.trigger(
                             camera_id, "unknown_person", frame=frame, box=box[:4],
                             result=result, confidence=det.confidence,
