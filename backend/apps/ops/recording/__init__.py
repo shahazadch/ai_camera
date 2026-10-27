@@ -26,6 +26,30 @@ class ClipResult:
     details: dict[str, Any]
 
 
+def browser_mp4(src, dst) -> None:
+    """Re-encode ``src`` to H.264 at ``dst`` (playable in any browser), then delete ``src``."""
+    import subprocess
+    from pathlib import Path
+
+    src, dst = Path(src), Path(dst)
+    tmp = dst.with_suffix(".h264.mp4")
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
+                "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", str(tmp),
+            ],
+            check=True,
+            timeout=120,
+        )
+        tmp.replace(dst)
+    finally:
+        tmp.unlink(missing_ok=True)
+        if src != dst:
+            src.unlink(missing_ok=True)
+
+
 class RecordingAdapter(ABC):
     vendor: str = "stub"
 
@@ -98,7 +122,8 @@ class RTSPRecordingAdapter(RecordingAdapter):
             fps = cap.get(cv2.CAP_PROP_FPS) or 5
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 640)
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 480)
-            writer = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+            raw = out.with_suffix(".raw.mp4")
+            writer = cv2.VideoWriter(str(raw), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
             frames = int(max(1, fps) * min(duration, 10))
             for _ in range(frames):
                 ok, frame = cap.read()
@@ -107,7 +132,13 @@ class RTSPRecordingAdapter(RecordingAdapter):
                 writer.write(frame)
             writer.release()
             cap.release()
-            return ClipResult(clip_key=key, evidence_url=f"/media/{key}", details={"frames": frames})
+            # Browsers can't play OpenCV's mp4v; re-encode to H.264 like the continuous recorder.
+            browser_mp4(raw, out)
+            return ClipResult(
+                clip_key=key,
+                evidence_url=f"/media/{key}",
+                details={"frames": frames, "size_bytes": out.stat().st_size},
+            )
         except Exception as exc:
             # Fail the job instead of marking a clip READY that was never written.
             raise RuntimeError(f"RTSP clip capture failed: {exc}") from exc
