@@ -17,3 +17,5 @@ edge/.pytest_cache/
 .DS_Store
 .env
 *.tsbuildinfo
+backend/models/*
+!backend/models/.keep
