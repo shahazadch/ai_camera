@@ -2323,3 +2323,9 @@ img, video, canvas { max-width: 100%; height: auto; }
   width: 16px;
   height: 16px;
 }
+
+/* Alerts: select checkbox column before the severity icon. */
+.alert-card.selectable { grid-template-columns: 20px 42px minmax(0, 1fr); }
+@media (max-width: 900px) {
+  .alert-card.selectable { grid-template-columns: 20px minmax(0, 1fr); }
+}

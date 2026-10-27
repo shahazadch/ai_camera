@@ -37,6 +37,8 @@ export default function AlertsPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [acknowledgingId, setAcknowledgingId] = useState("");
+  const [deletingAll, setDeletingAll] = useState(false);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
   const [statusFilter, setStatusFilter] = useState<AlertStatusFilter>("open");
 
   const loadAlerts = useCallback(async (silent = false) => {
@@ -79,11 +81,60 @@ export default function AlertsPage() {
     }
   }
 
+  async function deleteAll() {
+    if (!window.confirm("Delete all alerts? This cannot be undone.")) return;
+    setDeletingAll(true);
+    try {
+      await api.deleteAllAlerts();
+      setAlerts([]);
+      setChecked(new Set());
+      setError("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeletingAll(false);
+    }
+  }
+
   const filteredAlerts = useMemo(() => {
     return alerts.filter(
       (alert) => statusFilter === "all" || alert.status === statusFilter
     );
   }, [alerts, statusFilter]);
+
+  // Only count ticks on alerts visible in this tab.
+  const selectedIds = filteredAlerts.filter((a) => checked.has(a.id)).map((a) => a.id);
+  const allChecked = filteredAlerts.length > 0 && selectedIds.length === filteredAlerts.length;
+
+  function toggleOne(id: string) {
+    setChecked((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setChecked(allChecked ? new Set() : new Set(filteredAlerts.map((a) => a.id)));
+  }
+
+  async function deleteSelected() {
+    if (!selectedIds.length) return;
+    if (!window.confirm(`Delete ${selectedIds.length} selected alert(s)? This cannot be undone.`)) return;
+    setDeletingAll(true);
+    try {
+      await api.deleteAlerts(selectedIds);
+      const gone = new Set(selectedIds);
+      setAlerts((prev) => prev.filter((a) => !gone.has(a.id)));
+      setChecked(new Set());
+      setError("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeletingAll(false);
+    }
+  }
 
   return (
     <div className="alerts-page">
@@ -91,10 +142,20 @@ export default function AlertsPage() {
         <div>
           <h1>Security Alerts</h1>
         </div>
-        <button className="btn secondary alert-refresh" onClick={() => loadAlerts()} disabled={refreshing}>
-          <Icon name="event" />
-          {refreshing ? "Refreshing…" : "Refresh"}
-        </button>
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          <button
+            className="btn data-delete-all"
+            onClick={deleteAll}
+            disabled={alerts.length === 0 || deletingAll}
+          >
+            <Icon name="trash" />
+            {deletingAll ? "Deleting…" : "Delete all"}
+          </button>
+          <button className="btn secondary alert-refresh" onClick={() => loadAlerts()} disabled={refreshing}>
+            <Icon name="event" />
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
       </header>
 
       {error && <div className="error-banner alert-page-error">{error}</div>}
@@ -111,6 +172,23 @@ export default function AlertsPage() {
             </button>
           ))}
         </div>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={allChecked}
+            onChange={toggleAll}
+            disabled={filteredAlerts.length === 0}
+          />
+          Check all
+        </label>
+        <button
+          className="btn data-delete-all"
+          onClick={deleteSelected}
+          disabled={selectedIds.length === 0 || deletingAll}
+        >
+          <Icon name="trash" />
+          Delete selected ({selectedIds.length})
+        </button>
       </div>
 
       {loading ? (
@@ -122,7 +200,14 @@ export default function AlertsPage() {
       ) : (
         <div className="alert-list">
           {filteredAlerts.map((alert) => (
-            <article key={alert.id} className={`alert-card ${alert.severity}`}>
+            <article key={alert.id} className={`alert-card selectable ${alert.severity}`}>
+              <input
+                type="checkbox"
+                checked={checked.has(alert.id)}
+                onChange={() => toggleOne(alert.id)}
+                aria-label="Select alert"
+                style={{ alignSelf: "flex-start", marginTop: "0.75rem" }}
+              />
               <div className={`alert-severity-icon ${alert.severity}`}>
                 <Icon name={alert.severity === "critical" ? "alert" : "bell"} />
               </div>

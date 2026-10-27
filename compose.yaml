@@ -70,7 +70,7 @@ services:
       ALERT_PLAYER_KEY: ${ALERT_PLAYER_KEY:-alert-dev-key-change-me}
     mem_limit: 1g
     ports:
-      - "8000:8000"
+      - "8005:8000"
     volumes:
       - media_data:/app/media
       - model_cache:/app/model_cache
@@ -142,6 +142,7 @@ services:
 
   frontend:
     build: ./frontend
+    restart: unless-stopped
     ports:
       - "3000:80"
     volumes:

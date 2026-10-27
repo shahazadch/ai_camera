@@ -61,9 +61,9 @@ only to change passwords or tuning.
 | Service   | URL                          |
 |-----------|------------------------------|
 | Dashboard | http://localhost:3000        |
-| API       | http://localhost:8000/api/v1 |
-| API Docs  | http://localhost:8000/api/docs/ |
-| Health    | http://localhost:8000/api/v1/health/ |
+| API       | http://localhost:8005/api/v1 |
+| API Docs  | http://localhost:8005/api/docs/ |
+| Health    | http://localhost:8005/api/v1/health/ |
 
 **Demo login:** `admin` / `admin123`
 
@@ -193,7 +193,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173 — API requests proxy to http://localhost:8000
+Open http://localhost:5173 — API requests proxy to http://localhost:8005
 
 ### AI Vision (free, no API key)
 

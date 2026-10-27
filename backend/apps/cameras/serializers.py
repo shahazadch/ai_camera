@@ -266,6 +266,6 @@ class VisionCaptureSerializer(serializers.ModelSerializer):
 
         media_url = settings.MEDIA_URL.rstrip("/") + "/"
         path = obj.image_path.lstrip("/")
-        url = f"{media_url}{path}"
-        request = self.context.get("request")
-        return request.build_absolute_uri(url) if request else url
+        # Relative like recording clips: an absolute URL built behind the
+        # frontend proxy loses the port (http://localhost/media/... → broken).
+        return f"{media_url}{path}"

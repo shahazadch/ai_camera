@@ -763,6 +763,19 @@ class ApiClient {
     return this.request<Paginated<Alert>>("/alerts/");
   }
 
+  deleteAllAlerts() {
+    return this.request<{ deleted: number }>("/alerts/", {
+      method: "DELETE",
+    });
+  }
+
+  deleteAlerts(ids: string[]) {
+    return this.request<{ deleted: number }>("/alerts/", {
+      method: "DELETE",
+      body: JSON.stringify({ ids }),
+    });
+  }
+
   acknowledgeAlert(id: string) {
     return this.request<Alert>(`/alerts/${id}/acknowledge/`, {
       method: "PATCH",

@@ -224,7 +224,7 @@ class FaceEnrollView(APIView):
         active_count = FaceEmbedding.objects.filter(person=person, is_active=True).count()
         primary_url = ""
         if results[0].get("primary_image_url"):
-            primary_url = request.build_absolute_uri(results[0]["primary_image_url"])
+            primary_url = results[0]["primary_image_url"]
 
         message = (
             f"Ultra enrollment complete for {person.full_name}: "

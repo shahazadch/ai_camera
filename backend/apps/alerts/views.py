@@ -38,6 +38,21 @@ class AlertListView(TenantQuerysetMixin, generics.ListAPIView):
             "event", "event__camera", "event__camera__site"
         )
 
+    def delete(self, request):
+        """Body {"ids": [...]} deletes those alerts; no ids deletes every alert."""
+        queryset = Alert.objects.filter(organization_id__in=self.get_user_organizations())
+        ids = (request.data or {}).get("ids") if isinstance(request.data, dict) else None
+        if ids is not None:
+            if not isinstance(ids, list):
+                return Response({"detail": "ids must be a list."}, status=status.HTTP_400_BAD_REQUEST)
+            queryset = queryset.filter(id__in=[str(i) for i in ids])
+        organizations = {alert.organization for alert in queryset.select_related("organization")}
+        for organization in organizations:
+            require_role(request.user, organization, [Role.OWNER, Role.ADMIN])
+        deleted_count = queryset.count()
+        queryset.delete()
+        return Response({"deleted": deleted_count})
+
 
 class AlertAcknowledgeView(TenantQuerysetMixin, APIView):
     permission_classes = [permissions.IsAuthenticated]

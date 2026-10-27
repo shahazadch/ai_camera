@@ -5,7 +5,7 @@ Play a sound on this computer when a camera rule with a sound fires
 Python standard library only.
 
     python3 scripts/alert_player.py
-    python3 scripts/alert_player.py --api http://localhost:8000/api/v1 --key <ALERT_PLAYER_KEY>
+    python3 scripts/alert_player.py --api http://localhost:8005/api/v1 --key <ALERT_PLAYER_KEY>
     python3 scripts/alert_player.py --test siren          # play a built-in tune
     python3 scripts/alert_player.py --say "Hello"         # check the voice
 
@@ -226,7 +226,7 @@ def fetch(api: str, key: str, after: int | None) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--api", default=os.getenv("SENTINEL_API", "http://localhost:8000/api/v1"))
+    parser.add_argument("--api", default=os.getenv("SENTINEL_API", "http://localhost:8005/api/v1"))
     parser.add_argument("--key", default=os.getenv("ALERT_PLAYER_KEY", "alert-dev-key-change-me"))
     parser.add_argument("--interval", type=float, default=1.0, help="seconds between checks")
     parser.add_argument(

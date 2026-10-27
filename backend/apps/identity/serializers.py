@@ -71,8 +71,8 @@ class PersonSerializer(serializers.ModelSerializer):
             url = f"{media_url}{path}"
         if not url:
             return None
-        request = self.context.get("request")
-        return request.build_absolute_uri(url) if request else url
+        # Relative: absolute URLs built behind the frontend proxy lose the port.
+        return url
 
 
 class FaceImageSerializer(serializers.ModelSerializer):
@@ -219,8 +219,8 @@ class UnknownSightingSerializer(serializers.ModelSerializer):
         if path.startswith(media_url.lstrip("/")):
             path = path[len(media_url.lstrip("/")) :]
         url = f"{media_url}{path}"
-        request = self.context.get("request")
-        return request.build_absolute_uri(url) if request else url
+        # Relative: absolute URLs built behind the frontend proxy lose the port.
+        return url
 
 
 class PersonSightingSerializer(serializers.ModelSerializer):
@@ -259,8 +259,8 @@ class PersonSightingSerializer(serializers.ModelSerializer):
         if path.startswith(media_url.lstrip("/")):
             path = path[len(media_url.lstrip("/")) :]
         url = f"{media_url}{path}"
-        request = self.context.get("request")
-        return request.build_absolute_uri(url) if request else url
+        # Relative: absolute URLs built behind the frontend proxy lose the port.
+        return url
 
 
 class FaceMatchRequestSerializer(serializers.Serializer):
